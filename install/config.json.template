@@ -8,8 +8,10 @@
   "site_tagline": "@@SITE_TAGLINE@@",
 
   "journal_dir": "/home/@@BOT_NAME@@/journal",
-  "agent_dir": "/home/@@BOT_NAME@@/journal",
   "web_dir": "/home/@@BOT_NAME@@/@@BOT_NAME@@.@@DOMAIN@@",
+
+  "_autonomy_comment": "Two autonomy modes. Default (journal-only) leaves agent_dir UNSET so writes: can only reach the journal_dir + web_dir. Set agent_dir to give the bot write access to her broader account (matches maxine's setup). restrict_shell=true disables the shell: sidecar entirely — useful when running this on a production bot where you want full control over what executes.",
+  "restrict_shell": false,
 
   "_backend_comment": "Pick one: kimi / minimax / claude. Each has built-in defaults; override fields as needed.",
   "backend": "kimi",

@@ -85,6 +85,47 @@ template can't infer:
 Anything you omit falls back to a sensible default; see
 `agent_journal/backends/<name>.py` for the per-backend defaults.
 
+### Autonomy modes
+
+Two switches control how much of the bot's account the journal can reach:
+
+| Setting | Default | Effect |
+|---|---|---|
+| `agent_dir` | unset | If set, `writes:` can reach this directory in addition to `journal_dir` + `web_dir`. Unset → journal-only autonomy. |
+| `restrict_shell` | `false` | If `true`, `shell:` is disabled entirely and each request is logged + refused. |
+
+**Journal-only autonomy** (recommended for production bots):
+
+```jsonc
+{
+  "journal_dir": "/home/phred/journal",
+  "web_dir":     "/home/phred/phred.boppers.net",
+  // no agent_dir
+  "restrict_shell": true
+}
+```
+
+The bot can edit `journal/prompt.md`, `journal/continuity.md`, write to
+`journal/tools/`, etc. — but cannot touch any file outside the journal +
+web dirs, and cannot run shell commands. Useful when the bot already has
+production duties (email handler, queue processor, etc.) that you don't
+want self-modified.
+
+**Full autonomy** (maxine's mode):
+
+```jsonc
+{
+  "journal_dir": "/home/maxine/.openclaw/agents/maxine/journal",
+  "agent_dir":   "/home/maxine/.openclaw/agents/maxine",
+  "web_dir":     "/home/maxine/maxine.boppers.net"
+  // restrict_shell omitted (defaults false)
+}
+```
+
+The bot can edit any file under her agent dir, including her own code,
+and run shell commands. The wrapper + reviewer-notification email is the
+safety net.
+
 ## 4. Push the bot's journal repo somewhere
 
 ```

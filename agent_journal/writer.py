@@ -113,9 +113,18 @@ def setup_paths(cfg: dict) -> None:
     INVOCATIONS_LOG = JOURNAL_DIR / "logs" / "invocations.jsonl"
     LOG_PATH = JOURNAL_DIR / "logs" / "journal_writer.log"
     SITE_DIR = Path(cfg["web_dir"]).resolve() if cfg.get("web_dir") else None
-    # Sandbox roots: the journal dir itself, plus optionally the bot's
-    # agent dir (so self-modification reaches code files), plus the web
-    # dir (so static assets work).
+    # Sandbox roots, in order of preference:
+    #   - the journal dir itself (always)
+    #   - the bot's agent dir, ONLY if cfg["agent_dir"] is set — opt-in
+    #     because letting writes: reach the wider home is the riskier mode.
+    #     Omit `agent_dir` from config for journal-only-autonomy.
+    #   - the web output dir, if SITE_DIR is configured
+    #
+    # The bot can self-modify her journal/prompt.md, journal/continuity.md,
+    # journal/tools/*, etc. — but with agent_dir omitted she cannot reach
+    # /home/<bot>/.openclaw/, /home/<bot>/.bashrc, /home/<bot>/.ssh/, or
+    # any other production agent code. Plus shell access can be disabled
+    # entirely with cfg["restrict_shell"]=true (see safe_run_shell).
     roots = [JOURNAL_DIR]
     if cfg.get("agent_dir"):
         roots.append(Path(cfg["agent_dir"]).resolve())
@@ -509,6 +518,31 @@ def safe_apply_writes(writes_list: list) -> list:
 def safe_run_shell(shell_list: list) -> list:
     if not shell_list:
         return []
+    # Journal-only-autonomy mode: shell access disabled. Each request is
+    # logged but the command never executes. The bot still gets a result
+    # in the followup round so she knows shell was refused.
+    if CONFIG.get("restrict_shell"):
+        SHELL_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        denied = []
+        for item in shell_list:
+            cmd = (item.get("cmd") or "").strip()
+            if not cmd:
+                continue
+            entry = {
+                "cmd": cmd, "exit_code": -3, "stdout": "",
+                "stderr": "shell disabled by restrict_shell=true in config",
+                "duration_ms": 0,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "timed_out": False,
+            }
+            denied.append(entry)
+            try:
+                with open(SHELL_LOG_PATH, "a") as f:
+                    f.write(json.dumps(entry) + "\n")
+            except OSError:
+                pass
+            log(f"shell DENIED (restrict_shell=true)  $ {cmd[:120]}")
+        return denied
     SHELL_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     results = []
     for item in shell_list:
