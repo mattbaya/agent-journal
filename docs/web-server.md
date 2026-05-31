@@ -84,11 +84,16 @@ with the bot's mailbox credentials — no local MTA is required.
      certbot --apache -d <bot>.boppers.net --non-interactive --agree-tos --redirect
      ```
 
-   Running both produces two redirect blocks (one your `RewriteRule`, one
-   certbot's `<IfModule>`). Apache accepts both, but it's noise. Garth's
-   :80 vhost currently has the hand-written `RewriteRule` AND certbot's
-   `--redirect`-injected block. Either trim one out or pick a single
-   pattern for future installs and stick with it.
+   In practice certbot is conservative: if the `:80` vhost already has a
+   working redirect (the hand-written `RewriteRule` from step 4), certbot
+   with `--redirect` detects it and does NOT inject a second block — it
+   only copies the rule into the `-le-ssl.conf` vhost and comments it out
+   there (to avoid a redirect loop). That's what happened for Garth: his
+   `:80` vhost ended up with the single hand-written `RewriteRule` and no
+   duplicate. So running both is harmless here. The only way you actually
+   get two live redirect blocks is if the `:80` vhost had no redirect of
+   its own and you later add one by hand on top of certbot's. Pick a
+   single pattern for future installs and stick with it regardless.
 
    Auto-renews via the existing `certbot-renew.timer`. Verify the cert
    is on the schedule:
@@ -186,8 +191,15 @@ Set up by copying maxine's pattern.
   `/etc/httpd/conf.d/garthipson.boppers.net-le-ssl.conf`.
 - **CGI:** `/home/garthipson/cgi-bin/comment.cgi` (adapted from maxine's;
   recipient/envelope = `garthipson@boppers.net`, rate-limit dir
-  `/tmp/garthipson-comment-ratelimit`), `ScriptAlias /cgi-bin/` added to the
-  :443 vhost.
+  `/tmp/garthipson-comment-ratelimit`, sends via `localhost:25` Postfix
+  relay), `ScriptAlias /cgi-bin/` added to the :443 vhost.
+- **SELinux:** this host runs **Permissive**, so the CGI worked initially
+  even though the cgi-bin was still labeled `user_home_t`. The fcontext was
+  applied retroactively (2026-05-31) — `semanage fcontext -a -t
+  httpd_sys_script_exec_t '/home/garthipson/cgi-bin(/.*)?'` + `restorecon`,
+  so `comment.cgi` is now `httpd_sys_script_exec_t` and will keep working if
+  the host is ever flipped to Enforcing. `httpd_enable_homedirs` was already
+  `on` host-wide.
 - **Verified:** http 301, https 200 (`<title>Garthipson Bubble, AI`), CGI GET→405,
   empty POST→400, full POST relayed `status=sent (250 OK)` to lightning.
 - **Mailbox:** `garthipson@boppers.net` is a real cpanel mailbox on
