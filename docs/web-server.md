@@ -205,10 +205,10 @@ Set up by copying maxine's pattern.
 - **Mailbox:** `garthipson@boppers.net` is a real cpanel mailbox on
   lightning (password staged with ralph; also in `/home/garthipson/.journal-secrets.json`
   on dev as `EMAIL_PASSWORD`). Comments submitted through the form land
-  in that inbox. No email-handler agent reads the inbox yet — Garth has
+  in that inbox. No email-handler agent reads the inbox yet — Garthipson has
   the journal effort only, not the full openclaw email stack — so until
   one is wired up, comments wait there for whoever checks.
-- **Garth's first published entry was pre-generated** by a dry-run before
+- **Garthipson's first published entry was pre-generated** by a dry-run before
   the vhost existed, so the static files (`index.html`, `style.css`,
   `feed.xml`, `2026-05-31-first-light-first-entry.html`) were already in
   place when the vhost was installed. This is the expected flow with
