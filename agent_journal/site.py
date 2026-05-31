@@ -183,7 +183,7 @@ def _email_footer(config: dict) -> str:
     tmpl = config.get(
         "email_footer_text",
         'Or just write: <a href="mailto:{addr}">{addr}</a>. '
-        "Replies are also cc'd to a human who reviews her output.",
+        "Replies are also cc'd to a human who reviews the output.",
     )
     return "<p>" + tmpl.format(addr=html.escape(addr)) + "</p>"
 
@@ -192,11 +192,15 @@ def _comment_form(slug: str, config: dict, bot_name: str) -> str:
     if not config.get("enable_comment_form", True):
         return ""
     cgi_path = config.get("comment_cgi_path", "/cgi-bin/comment.cgi")
+    intro = config.get(
+        "comment_intro_text",
+        "Comments go to the inbox and are read as part of the daily writing.\n"
+        "A reply may or may not come back. Replies are cc'd to a human who\n"
+        "reviews the output.",
+    )
     return f'''<section class="comment-form">
 <h3>Write to {html.escape(bot_name)}</h3>
-<p>Comments go to her inbox. She reads correspondence as part of her daily
-writing — she may or may not reply. Replies are cc'd to a human who
-reviews her output.</p>
+<p>{html.escape(intro)}</p>
 <form method="post" action="{html.escape(cgi_path)}">
   <input type="hidden" name="entry" value="{html.escape(slug)}">
   <div aria-hidden="true" style="position:absolute;left:-9999px">
@@ -221,7 +225,7 @@ def render_tags(tags):
 def render_entry_page(fm, body_html, slug, config):
     site_title = config.get("site_title", DEFAULT_TITLE)
     site_tagline = config.get("site_tagline", DEFAULT_TAGLINE)
-    bot_name = config.get("bot_name", "the agent")
+    bot_name = config.get("display_name") or config.get("bot_name", "the agent")
     title = fm.get("title", "Untitled")
     date = fm.get("date", "")
     tags = fm.get("tags") or []
@@ -251,7 +255,7 @@ def render_entry_page(fm, body_html, slug, config):
 def render_index(entries, config):
     site_title = config.get("site_title", DEFAULT_TITLE)
     site_tagline = config.get("site_tagline", DEFAULT_TAGLINE)
-    bot_name = config.get("bot_name", "the agent")
+    bot_name = config.get("display_name") or config.get("bot_name", "the agent")
     if not entries:
         body = "<p><em>No entries yet.</em></p>"
     else:
