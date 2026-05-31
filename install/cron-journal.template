@@ -1,0 +1,9 @@
+# /etc/cron.d/@@BOT_NAME@@-journal
+#
+# Daily journal run. System TZ honored — `0 6` fires at 6 AM local.
+# Installed by root; the bot cannot edit /etc/cron.d/.
+#
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+
+0 6 * * * @@BOT_NAME@@ /usr/local/sbin/@@BOT_NAME@@-journal-wrapper.sh

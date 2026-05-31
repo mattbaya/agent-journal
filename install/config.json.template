@@ -1,0 +1,38 @@
+{
+  "_comment": "Per-bot agent-journal config. Edit ALL @@TOKEN@@ placeholders before install.",
+
+  "bot_name": "@@BOT_NAME@@",
+  "bot_email": "@@BOT_NAME@@@@@DOMAIN@@",
+  "site_url": "https://@@BOT_NAME@@.@@DOMAIN@@",
+  "site_title": "@@SITE_TITLE@@",
+  "site_tagline": "@@SITE_TAGLINE@@",
+
+  "journal_dir": "/home/@@BOT_NAME@@/journal",
+  "agent_dir": "/home/@@BOT_NAME@@/journal",
+  "web_dir": "/home/@@BOT_NAME@@/@@BOT_NAME@@.@@DOMAIN@@",
+
+  "_backend_comment": "Pick one: kimi / minimax / claude. Each has built-in defaults; override fields as needed.",
+  "backend": "kimi",
+  "model": "kimi-k2.5",
+  "api_key_secret": "MOONSHOT_API_KEY",
+  "input_price_per_m": 0.60,
+  "output_price_per_m": 2.50,
+
+  "max_tokens_default": 12000,
+  "max_tokens_ceiling": 24000,
+
+  "_email_comment": "SMTP for outbound journal emails and email-action tasks. Optional; omit if the bot doesn't send.",
+  "smtp_server": "<smtp-host>",
+  "smtp_port": 465,
+  "email_password_secret": "@@EMAIL_PASSWORD_SECRET@@",
+  "matt_bcc": "<reviewer-email>",
+
+  "_research_comment": "Optional Brave Search secret. Without it, RESEARCH blocks return a 'disabled' placeholder.",
+  "brave_search_secret": "BRAVE_SEARCH_API_KEY",
+
+  "_site_comment": "Comment-form CGI integration. Disable if not running a CGI receiver.",
+  "enable_comment_form": true,
+  "comment_cgi_path": "/cgi-bin/comment.cgi",
+
+  "reviewer_email": "<peer-reviewer-email>"
+}

@@ -1,0 +1,57 @@
+#!/bin/bash
+# Non-negotiable wrapper around the task runner (15-min tick).
+# Same enforcement pattern as the journal wrapper.
+
+set -uo pipefail
+
+BOT_NAME="@@BOT_NAME@@"
+JOURNAL_DIR="@@JOURNAL_DIR@@"
+AGENT_JOURNAL_PATH="@@AGENT_JOURNAL_PATH@@"
+CONFIG_PATH="@@CONFIG_PATH@@"
+REVIEWER_EMAIL="@@REVIEWER_EMAIL@@"
+LOG="$JOURNAL_DIR/logs/task_wrapper.log"
+WRAPPER_LABEL="[$BOT_NAME-task-wrapper]"
+
+mkdir -p "$JOURNAL_DIR/logs"
+exec >>"$LOG" 2>&1
+
+cd "$JOURNAL_DIR" || { echo "$(date -Iseconds) wrapper: cannot cd to $JOURNAL_DIR"; exit 2; }
+PRE_HEAD=$(git rev-parse HEAD 2>/dev/null || echo "(no head)")
+
+@@SECRETS_CMD@@ | PYTHONPATH="$AGENT_JOURNAL_PATH" /usr/bin/python3 \
+  -m agent_journal.tasks --config "$CONFIG_PATH" --secrets-stdin
+RUNNER_EXIT=$?
+
+if [ -n "$(git status --porcelain)" ]; then
+    echo "=== task wrapper $(date -Iseconds) runner_exit=$RUNNER_EXIT ==="
+    git add -A
+    git commit -m "${WRAPPER_LABEL} $(date -Iseconds) (runner exit=$RUNNER_EXIT)" || \
+        echo "wrapper: commit failed"
+fi
+if [ -n "$(git log @{u}.. --oneline 2>/dev/null)" ]; then
+    git push 2>&1 | tail -3 || echo "wrapper: push FAILED"
+fi
+
+POST_HEAD=$(git rev-parse HEAD)
+if [ "$PRE_HEAD" != "$POST_HEAD" ] && [ "$PRE_HEAD" != "(no head)" ]; then
+    CHANGED=$(git diff --name-only "$PRE_HEAD" "$POST_HEAD" 2>/dev/null \
+              | grep -v '^published/' \
+              | grep -v '^index\.json$' \
+              | grep -v '^tasks/')
+    if [ -n "$CHANGED" ]; then
+        SUBJECT="[$BOT_NAME task self-mod] $(date +%Y-%m-%d) task-runner changes"
+        BODY_FILE=$(mktemp)
+        {
+            echo "$BOT_NAME's task runner modified code/config this tick."
+            echo "Range: $PRE_HEAD..$POST_HEAD"
+            echo ""
+            echo "$CHANGED" | sed 's/^/  - /'
+            echo ""
+            echo "--- diff (50KB cap) ---"
+            git diff "$PRE_HEAD" "$POST_HEAD" -- $CHANGED 2>/dev/null | head -c 50000
+        } >"$BODY_FILE"
+        ( echo "Subject: $SUBJECT"; echo "To: $REVIEWER_EMAIL"; echo ""; cat "$BODY_FILE" ) \
+          | /usr/sbin/sendmail -t -i || echo "wrapper: sendmail failed"
+        rm -f "$BODY_FILE"
+    fi
+fi

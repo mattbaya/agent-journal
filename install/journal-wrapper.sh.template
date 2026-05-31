@@ -1,0 +1,103 @@
+#!/bin/bash
+#
+# Non-negotiable wrapper around agent-journal's daily writer.
+#
+# Owned by root, installed at /usr/local/sbin/<BOT>-journal-wrapper.sh.
+# Cron points HERE, not at the Python module directly. Even if the bot
+# self-edits her prompt or writer, this wrapper enforces:
+#   1. git add+commit+push of any working-tree change in the journal dir
+#   2. notification email to REVIEWER_EMAIL if anything outside
+#      published/ + index.json changed
+#
+# Substitute the @@TOKEN@@ placeholders before installing:
+#   @@BOT_NAME@@           the bot's name (used in commit messages)
+#   @@JOURNAL_DIR@@        absolute path to the journal directory
+#   @@AGENT_JOURNAL_PATH@@ where the agent_journal package is on disk
+#                          (e.g. /opt/agent-journal so it imports as
+#                          PYTHONPATH=/opt/agent-journal python -m agent_journal.writer)
+#   @@CONFIG_PATH@@        absolute path to the bot's config.json
+#   @@SECRETS_CMD@@        a shell command that prints the secrets JSON
+#                          (e.g. 'sudo -n -u clortho <secret-loader-cmd>'
+#                          or 'cat /etc/agent-journal/<bot>-secrets.json'
+#                          or 'env-to-json.sh')
+#   @@REVIEWER_EMAIL@@     where the self-mod notification goes
+#
+
+set -uo pipefail
+
+BOT_NAME="@@BOT_NAME@@"
+JOURNAL_DIR="@@JOURNAL_DIR@@"
+AGENT_JOURNAL_PATH="@@AGENT_JOURNAL_PATH@@"
+CONFIG_PATH="@@CONFIG_PATH@@"
+REVIEWER_EMAIL="@@REVIEWER_EMAIL@@"
+LOG="$JOURNAL_DIR/logs/journal_wrapper.log"
+WRAPPER_LABEL="[$BOT_NAME-journal-wrapper]"
+
+mkdir -p "$JOURNAL_DIR/logs"
+exec >>"$LOG" 2>&1
+
+echo "=== wrapper start $(date -Iseconds) ==="
+cd "$JOURNAL_DIR" || { echo "wrapper: cannot cd to $JOURNAL_DIR"; exit 2; }
+
+PRE_HEAD=$(git rev-parse HEAD 2>/dev/null || echo "(no head)")
+echo "wrapper: PRE_HEAD=$PRE_HEAD"
+
+# Run the writer, piping secrets in on stdin.
+@@SECRETS_CMD@@ | PYTHONPATH="$AGENT_JOURNAL_PATH" /usr/bin/python3 \
+  -m agent_journal.writer --config "$CONFIG_PATH" --secrets-stdin
+WRITER_EXIT=$?
+echo "wrapper: writer exit=$WRITER_EXIT"
+
+# Force commit if there are uncommitted changes (defense against
+# the writer being edited to skip its own auto-commit).
+if [ -n "$(git status --porcelain)" ]; then
+    git add -A
+    git commit -m "${WRAPPER_LABEL} forced commit $(date -Iseconds) (writer exit=$WRITER_EXIT)" || \
+        echo "wrapper: commit failed"
+fi
+if [ -n "$(git log @{u}.. --oneline 2>/dev/null)" ]; then
+    git push 2>&1 | tail -3 || echo "wrapper: push FAILED"
+fi
+
+POST_HEAD=$(git rev-parse HEAD)
+echo "wrapper: POST_HEAD=$POST_HEAD"
+
+# Reviewer notification on code/config changes only.
+if [ "$PRE_HEAD" != "$POST_HEAD" ] && [ "$PRE_HEAD" != "(no head)" ]; then
+    CHANGED=$(git diff --name-only "$PRE_HEAD" "$POST_HEAD" 2>/dev/null \
+              | grep -v '^published/' \
+              | grep -v '^index\.json$')
+    if [ -n "$CHANGED" ]; then
+        SUBJECT="[$BOT_NAME self-mod] $(date +%Y-%m-%d) journal changes"
+        BODY_FILE=$(mktemp)
+        {
+            echo "$BOT_NAME modified code/config files this run."
+            echo ""
+            echo "Commit range: $PRE_HEAD..$POST_HEAD"
+            echo ""
+            echo "Changed files (excluding published entries):"
+            echo "$CHANGED" | sed 's/^/  - /'
+            echo ""
+            echo "--- git log ---"
+            git log "$PRE_HEAD..$POST_HEAD" --pretty=format:'%h %s%n%b' 2>/dev/null
+            echo ""
+            echo ""
+            echo "--- git diff (50KB cap) ---"
+            git diff "$PRE_HEAD" "$POST_HEAD" -- $CHANGED 2>/dev/null | head -c 50000
+            echo ""
+            echo "[truncated; see GitHub for full diff]"
+        } >"$BODY_FILE"
+
+        # Send via /usr/sbin/sendmail (no SMTP creds needed in the wrapper).
+        # If your host doesn't have sendmail you'll want to switch this to
+        # use the agent_journal.writer.send_email_smtp helper instead.
+        ( echo "Subject: $SUBJECT"
+          echo "To: $REVIEWER_EMAIL"
+          echo ""
+          cat "$BODY_FILE"
+        ) | /usr/sbin/sendmail -t -i || echo "wrapper: sendmail failed"
+        rm -f "$BODY_FILE"
+    fi
+fi
+
+echo "=== wrapper done $(date -Iseconds) ==="
