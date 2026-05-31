@@ -73,6 +73,28 @@ READ_MAX_BYTES = 100_000
 RECENT_ENTRIES_IN_PROMPT = None  # None = no cap; show every past entry
 
 
+def _inline_drafts(drafts: list, drafts_dir: Path) -> str:
+    """Render drafts as labeled markdown sections with full content
+    (each capped at READ_MAX_BYTES). Returns '(none)' if no drafts."""
+    if not drafts:
+        return "(none)"
+    blocks = []
+    for f in drafts:
+        path = drafts_dir / f
+        try:
+            content = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            blocks.append(f"### drafts/{f}\n(could not read: {e})\n")
+            continue
+        truncated = ""
+        if len(content) > READ_MAX_BYTES:
+            content = content[:READ_MAX_BYTES]
+            truncated = (f"\n\n[... truncated at {READ_MAX_BYTES} bytes — "
+                         f"full file at drafts/{f} ...]")
+        blocks.append(f"### drafts/{f}\n\n{content}{truncated}\n")
+    return "\n".join(blocks)
+
+
 # ---------------------------------------------------------------------------
 # Config + secrets loading
 # ---------------------------------------------------------------------------
@@ -285,7 +307,7 @@ def build_prompt(today: datetime, past_entries: list, continuity: str,
         "past_count": str(len(shown)),
         "past_block": past_block,
         "continuity": (continuity or "").strip() or "(empty so far)",
-        "drafts_block": "\n".join(f"- drafts/{f}" for f in drafts) or "(none)",
+        "drafts_block": _inline_drafts(drafts, DRAFTS_DIR),
         "ideas_block": "\n".join(f"- ideas/{f}" for f in ideas) or "(none)",
         "tools_block": "\n".join(f"- tools/{f}" for f in tools) or "(none)",
         "inbox_block": inbox_block,
@@ -802,7 +824,7 @@ def main() -> int:
     ap.add_argument("--secrets-file", help="Path to JSON secrets file")
     ap.add_argument("--dry-run", action="store_true",
                     help="Write to drafts/ instead of published/; no commit, no site")
-    ap.add_argument("--max-research-rounds", type=int, default=1)
+    ap.add_argument("--max-research-rounds", type=int, default=4)
     args = ap.parse_args()
 
     CONFIG = load_config(Path(args.config))
@@ -872,11 +894,23 @@ def main() -> int:
                     b.append("```")
                 b.append("")
             extras.append("\n".join(b))
+        rounds_left = args.max_research_rounds - rounds - 1
+        if rounds_left > 0:
+            floor_text = (
+                f"\n\nYou have {rounds_left} more round(s) where you can request "
+                "more RESEARCH/reads:/shell: blocks if you still need to. "
+                "Otherwise write the final entry now."
+            )
+        else:
+            floor_text = (
+                "\n\nThis is your last round. Any further RESEARCH/reads:/shell: "
+                "blocks will be ignored — write the final entry now."
+            )
         followup = (prompt + "\n\n# Your first-pass output\n\n" + text + "\n\n"
                     + "\n\n".join(extras)
-                    + "\n\nNow write the final entry. No more RESEARCH/reads:/shell: blocks.")
+                    + floor_text)
         text = call_backend(followup, label=f"{CONFIG['bot_name']}_journal_round{rounds+2}")
-        log(f"post-followup response: {len(text)} chars")
+        log(f"post-followup response: {len(text)} chars (rounds_left was {rounds_left})")
         rounds += 1
 
     # Parse final entry
