@@ -2,7 +2,7 @@
 
 This walks through standing up agent-journal for a new bot on a host
 that already has the bot user, a way to source secrets, and SMTP for
-outbound mail. The reference install was for `maxine` on <host>
+outbound mail. The reference install was for `maxine` (a fleet bot)
 with secrets coming from Clortho; if your host is different, the
 moving pieces are the same.
 
@@ -36,7 +36,7 @@ sudo /opt/agent-journal/install/new-bot-install.sh \
   --domain       boppers.net \
   --site-title   "Phred writes" \
   --site-tagline "Voice, music, and other thoughts from Phred." \
-  --secrets-cmd  "sudo -n -u clortho <secret-loader-cmd>" \
+  --secrets-cmd  "<your-secret-loader-cmd>"  # any command that prints {"KEY":"value",...} to stdout \
   --email-password-secret EMAIL_PASSWORD
 ```
 
@@ -69,10 +69,10 @@ template can't infer:
   "output_price_per_m": 0.30,
 
   // SMTP for outbound (omit if the bot doesn't email)
-  "smtp_server": "<smtp-host>",
+  "smtp_server": "<your-smtp-host>",
   "smtp_port":   465,
   "email_password_secret": "EMAIL_PASSWORD",
-  "matt_bcc":    "<reviewer-email>",
+  "matt_bcc":    "<reviewer@example.com>",
 
   // optional: BRAVE_SEARCH_API_KEY enables RESEARCH blocks
   "brave_search_secret": "BRAVE_SEARCH_API_KEY",

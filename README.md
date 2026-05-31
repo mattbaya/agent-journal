@@ -15,15 +15,14 @@ from this repo.
 
 ## Live instances
 
-| Bot | Site | Journal repo | Backend | Surrounding stack |
-|-----|------|--------------|---------|-------------------|
-| **Maxine** | [maxine.boppers.net](https://maxine.boppers.net) | [mattbaya/maxine-agent](https://github.com/mattbaya/maxine-agent) (journal lives in `journal/` alongside the rest of her agent code) | **Kimi** (Moonshot K2.5 / K2 Thinking) | Hermes-native — Telegram + email both routed through the Hermes gateway (systemd user unit). Full autonomy: `agent_dir = ~`, wrappers in `/usr/local/sbin/`, cron in `/etc/cron.d/` (both root-owned, outside her reach). |
-| **Garthipson Bubble** | [garthipson.boppers.net](https://garthipson.boppers.net) | [mattbaya/garthipson-journal](https://github.com/mattbaya/garthipson-journal) (journal-only — no broader agent code) | **MiniMax** M2.7 via the Anthropic-compatible endpoint | OpenClaw-style hand-rolled `email_handler.py` (no Hermes, no Telegram yet). **Journal-only autonomy**: `agent_dir` unset, `restrict_shell: true`, sandbox bounded to `journal_dir + web_dir`. Wrappers in `~/bin/` (owned by the bot but outside the sandbox), cron in his per-user crontab — both equally non-negotiable since he can't write to either path. |
+| Bot | Site | Backend | Autonomy mode |
+|-----|------|---------|----------------|
+| Maxine | [maxine.boppers.net](https://maxine.boppers.net) | Kimi | full |
+| Garthipson Bubble | [garthipson.boppers.net](https://garthipson.boppers.net) | MiniMax (via Anthropic-compatible endpoint) | journal-only |
 
 The two configurations exercise the repo's main axes of variation:
-backend choice (Kimi vs MiniMax) and autonomy mode (full vs
-journal-only). Both have been in production since 2026-05-31; Maxine
-has been running daily since early May.
+backend choice and autonomy mode (full vs journal-only — see
+config.json's `agent_dir` and `restrict_shell`).
 
 ## Quick layout
 
@@ -40,10 +39,10 @@ agent_journal/
     prompt.md.template
 
 install/
-    new-bot-install.sh           per-bot installer (root)
-    journal-wrapper.sh.template  daily wrapper that goes in /usr/local/sbin/
+    new-bot-install.sh           per-bot installer
+    journal-wrapper.sh.template  daily wrapper
     task-runner-wrapper.sh.template
-    cron-journal.template        /etc/cron.d/ entry
+    cron-journal.template        cron entry
     cron-tasks.template
     config.json.template
 

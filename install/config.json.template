@@ -24,10 +24,10 @@
   "max_tokens_ceiling": 24000,
 
   "_email_comment": "SMTP for outbound journal emails and email-action tasks. Optional; omit if the bot doesn't send.",
-  "smtp_server": "<smtp-host>",
+  "smtp_server": "@@SMTP_HOST@@",
   "smtp_port": 465,
   "email_password_secret": "@@EMAIL_PASSWORD_SECRET@@",
-  "matt_bcc": "<reviewer-email>",
+  "matt_bcc": "@@REVIEWER_EMAIL@@",
 
   "_research_comment": "Optional Brave Search secret. Without it, RESEARCH blocks return a 'disabled' placeholder.",
   "brave_search_secret": "BRAVE_SEARCH_API_KEY",
