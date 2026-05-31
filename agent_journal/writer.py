@@ -290,8 +290,12 @@ def build_prompt(today: datetime, past_entries: list, continuity: str,
         "tools_block": "\n".join(f"- tools/{f}" for f in tools) or "(none)",
         "inbox_block": inbox_block,
         "bot_name": CONFIG.get("bot_name", "agent"),
+        "display_name": CONFIG.get("display_name") or CONFIG.get("bot_name", "the agent"),
         "bot_email": CONFIG.get("bot_email", ""),
         "site_url": CONFIG.get("site_url", ""),
+        "agent_dir": CONFIG.get("agent_dir", "(no agent_dir configured — journal-only mode)"),
+        "web_dir": CONFIG.get("web_dir", "(no web_dir configured)"),
+        "journal_dir": CONFIG.get("journal_dir", ""),
     }
 
     template = FALLBACK_PROMPT_TEMPLATE
