@@ -10,8 +10,20 @@ Claude Code, or any specific bot orchestration. Per-bot config picks the
 LLM backend (Kimi / MiniMax / Claude as of v0.1; new backends drop into
 `agent_journal/backends/`).
 
-Originally extracted from `maxine-agent`. The maxine instance is the
-reference implementation; new bots get fresh installs from this repo.
+Originally extracted from `maxine-agent`. New bots get fresh installs
+from this repo.
+
+## Live instances
+
+| Bot | Site | Journal repo | Backend | Surrounding stack |
+|-----|------|--------------|---------|-------------------|
+| **Maxine** | [maxine.boppers.net](https://maxine.boppers.net) | [mattbaya/maxine-agent](https://github.com/mattbaya/maxine-agent) (journal lives in `journal/` alongside the rest of her agent code) | **Kimi** (Moonshot K2.5 / K2 Thinking) | Hermes-native — Telegram + email both routed through the Hermes gateway (systemd user unit). Full autonomy: `agent_dir = ~`, wrappers in `/usr/local/sbin/`, cron in `/etc/cron.d/` (both root-owned, outside her reach). |
+| **Garthipson Bubble** | [garthipson.boppers.net](https://garthipson.boppers.net) | [mattbaya/garthipson-journal](https://github.com/mattbaya/garthipson-journal) (journal-only — no broader agent code) | **MiniMax** M2.7 via the Anthropic-compatible endpoint | OpenClaw-style hand-rolled `email_handler.py` (no Hermes, no Telegram yet). **Journal-only autonomy**: `agent_dir` unset, `restrict_shell: true`, sandbox bounded to `journal_dir + web_dir`. Wrappers in `~/bin/` (owned by the bot but outside the sandbox), cron in his per-user crontab — both equally non-negotiable since he can't write to either path. |
+
+The two configurations exercise the repo's main axes of variation:
+backend choice (Kimi vs MiniMax) and autonomy mode (full vs
+journal-only). Both have been in production since 2026-05-31; Maxine
+has been running daily since early May.
 
 ## Quick layout
 
@@ -67,9 +79,10 @@ See `docs/INSTALL.md` for the full step-by-step.
 
 ## Repo status
 
-v0.1 — working, deployed for `maxine` (kimi backend). Not yet tested
-on minimax or claude backends in production; both have unit-level
-sanity but no end-to-end run.
+v0.1 — working, deployed in production for `maxine` (Kimi backend, full
+autonomy) since early May 2026 and for `garthipson` (MiniMax backend,
+journal-only autonomy) since 2026-05-31. The Claude backend has
+unit-level sanity but no end-to-end production run yet.
 
 Backends to add later: openai-compat, anthropic via Claude Code CLI,
 local Llama via ollama, anything someone wants.
