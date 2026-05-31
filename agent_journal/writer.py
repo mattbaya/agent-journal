@@ -121,7 +121,7 @@ def load_secrets_from_stdin() -> dict:
 def setup_paths(cfg: dict) -> None:
     global JOURNAL_DIR, PUBLISHED_DIR, DRAFTS_DIR, IDEAS_DIR, TOOLS_DIR
     global INDEX_PATH, CONTINUITY_PATH, PROMPT_PATH, SHELL_LOG_PATH
-    global INVOCATIONS_LOG, SITE_DIR, LOG_PATH, WRITE_ROOTS
+    global INVOCATIONS_LOG, SITE_DIR, LOG_PATH, LAST_RUN_PATH, WRITE_ROOTS
 
     JOURNAL_DIR = Path(cfg["journal_dir"]).resolve()
     PUBLISHED_DIR = JOURNAL_DIR / "published"
@@ -134,6 +134,7 @@ def setup_paths(cfg: dict) -> None:
     SHELL_LOG_PATH = JOURNAL_DIR / "shell_log.jsonl"
     INVOCATIONS_LOG = JOURNAL_DIR / "logs" / "invocations.jsonl"
     LOG_PATH = JOURNAL_DIR / "logs" / "journal_writer.log"
+    LAST_RUN_PATH = JOURNAL_DIR / "logs" / ".last-journal-run"
     SITE_DIR = Path(cfg["web_dir"]).resolve() if cfg.get("web_dir") else None
     # Sandbox roots, in order of preference:
     #   - the journal dir itself (always)
@@ -811,6 +812,48 @@ def regenerate_site(index: list) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Interval gating
+# ---------------------------------------------------------------------------
+
+def _interval_check(now: datetime) -> tuple:
+    """Return (should_run, reason). Reads `journal_interval_hours` from
+    CONFIG (default 24); compares now against the timestamp stored in
+    LAST_RUN_PATH. The bot can edit `journal_interval_hours` in her own
+    config.json via a `writes:` block — the next wrapper tick honors
+    the new value.
+
+    journal_interval_hours = 0 means "run every tick, no gating" (useful
+    for trigger-driven setups where the wrapper is invoked only when a
+    trigger fires).
+    """
+    raw = CONFIG.get("journal_interval_hours", 24)
+    try:
+        interval_secs = int(float(raw) * 3600)
+    except (TypeError, ValueError):
+        log(f"invalid journal_interval_hours={raw!r}; falling back to 24")
+        interval_secs = 24 * 3600
+    if interval_secs <= 0:
+        return True, "journal_interval_hours <= 0 (no gating)"
+    if not LAST_RUN_PATH.exists():
+        return True, "no prior run recorded"
+    try:
+        last = int(LAST_RUN_PATH.read_text().strip())
+    except (ValueError, OSError):
+        return True, "stale or unreadable .last-journal-run; will overwrite"
+    elapsed = int(now.timestamp()) - last
+    if elapsed >= interval_secs:
+        return True, f"elapsed {elapsed}s >= interval {interval_secs}s"
+    remaining = interval_secs - elapsed
+    return False, (f"interval not elapsed: {remaining}s remaining of "
+                   f"{interval_secs}s (journal_interval_hours={raw})")
+
+
+def _record_run(now: datetime) -> None:
+    LAST_RUN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    LAST_RUN_PATH.write_text(str(int(now.timestamp())))
+
+
+# ---------------------------------------------------------------------------
 # main()
 # ---------------------------------------------------------------------------
 
@@ -824,7 +867,11 @@ def main() -> int:
     ap.add_argument("--secrets-file", help="Path to JSON secrets file")
     ap.add_argument("--dry-run", action="store_true",
                     help="Write to drafts/ instead of published/; no commit, no site")
-    ap.add_argument("--max-research-rounds", type=int, default=4)
+    ap.add_argument("--max-research-rounds", type=int, default=0,
+                    help="Hard cap on followup rounds; 0 (default) = no cap. "
+                         "Use a positive value as an ops-level circuit breaker.")
+    ap.add_argument("--force", action="store_true",
+                    help="Ignore journal_interval_hours gating and run now.")
     args = ap.parse_args()
 
     CONFIG = load_config(Path(args.config))
@@ -839,6 +886,16 @@ def main() -> int:
     BACKEND = load_backend(CONFIG, SECRETS)
 
     today = datetime.now()
+
+    # Interval gating: skip if it's been less than journal_interval_hours
+    # since the last successful run, unless --force is passed.
+    if not args.force and not args.dry_run:
+        should_run, reason = _interval_check(today)
+        if not should_run:
+            log(f"skip: {reason}")
+            return 0
+        log(f"interval check: {reason}")
+
     log(f"=== run start {today.isoformat()} backend={BACKEND.name} model={BACKEND.model} dry_run={args.dry_run} ===")
 
     past_entries = load_index()
@@ -854,7 +911,7 @@ def main() -> int:
 
     # Followup rounds for research/reads/shell
     rounds = 0
-    while rounds < args.max_research_rounds:
+    while True:
         queries = parse_research_block(text)
         partial = parse_sidecar_block(text) if "<!--" in text else {}
         reads = partial.get("reads", []) if isinstance(partial, dict) else []
@@ -894,24 +951,27 @@ def main() -> int:
                     b.append("```")
                 b.append("")
             extras.append("\n".join(b))
-        rounds_left = args.max_research_rounds - rounds - 1
-        if rounds_left > 0:
+        if args.max_research_rounds and rounds + 1 >= args.max_research_rounds:
             floor_text = (
-                f"\n\nYou have {rounds_left} more round(s) where you can request "
-                "more RESEARCH/reads:/shell: blocks if you still need to. "
-                "Otherwise write the final entry now."
+                "\n\nThis is your last round — the --max-research-rounds "
+                f"circuit breaker ({args.max_research_rounds}) has been reached. "
+                "Any further RESEARCH/reads:/shell: blocks will be ignored — "
+                "write the final entry now."
             )
         else:
             floor_text = (
-                "\n\nThis is your last round. Any further RESEARCH/reads:/shell: "
-                "blocks will be ignored — write the final entry now."
+                "\n\nIf you still need more material, request it and there "
+                "will be another round. Otherwise write the final entry now."
             )
         followup = (prompt + "\n\n# Your first-pass output\n\n" + text + "\n\n"
                     + "\n\n".join(extras)
                     + floor_text)
         text = call_backend(followup, label=f"{CONFIG['bot_name']}_journal_round{rounds+2}")
-        log(f"post-followup response: {len(text)} chars (rounds_left was {rounds_left})")
+        log(f"post-followup response: {len(text)} chars (round {rounds + 1} complete)")
         rounds += 1
+        if args.max_research_rounds and rounds >= args.max_research_rounds:
+            log(f"hit --max-research-rounds cap of {args.max_research_rounds}; forcing exit")
+            break
 
     # Parse final entry
     fm, body = parse_frontmatter(text)
@@ -961,6 +1021,7 @@ def main() -> int:
     })
     save_index(past_entries)
     regenerate_site(past_entries)
+    _record_run(today)
     log("=== run done ===")
     return 0
 

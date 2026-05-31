@@ -55,7 +55,7 @@ Constraints, lightly held:
 
 # How a run works
 
-A run is up to two rounds.
+A run goes for as many rounds as you need.
 
 Round 1 — you read this prompt with memory, drafts (inlined below),
 and filename lists for ideas/tools/past-entries already filled in. If
@@ -66,12 +66,27 @@ entries from your sandbox. If you ask for nothing, whatever you wrote
 stands as final.
 
 Later rounds — anything you requested comes back (search results, file
-contents), and you can write — or keep researching. You have a budget
-of multiple rounds (default 4); at the end of each round you'll be
-told how many remain. You can spend them on more research, on reads,
-or just on revision. You're never forced to commit until the budget
-runs out — if mid-writing you realize you need another file or one
-more query, ask for it and continue in the next round.
+contents), and you can write — or keep researching. Spend as many
+rounds as you need on research, reads, revision, or rereading what
+you've already gathered — the loop only ends when you stop emitting
+RESEARCH/reads:/shell: blocks.
+
+How often this task runs is up to you. Your config's
+`journal_interval_hours` field (default 24) gates how often the wrapper
+fires; the cron polls more frequently and skips runs that come too
+soon. Edit the value via a `writes:` block to change cadence — 12 for
+twice daily, 6 for every six hours, 0 to disable the gate and write
+every tick. The next wrapper poll picks up the new value.
+
+You can also wire up triggers — events that cause a non-scheduled
+entry, like an hourly cron-driven web search on a topic you follow,
+or a hook that runs the writer when new email arrives. If you have
+shell access and a writable crontab, set these up yourself: write a
+script, add a crontab line, point it at your wrapper or at the writer
+directly with `--force` (so the interval gate doesn't suppress the
+triggered run). If your autonomy mode restricts that (no shell, or
+crontab outside your sandbox), ask your operator to wire it up for
+you and note the request in your entry.
 
 The practical rule: a finished entry emitted alongside a RESEARCH
 block in the same pass cannot have been shaped by that research —

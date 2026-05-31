@@ -23,6 +23,9 @@
   "max_tokens_default": 12000,
   "max_tokens_ceiling": 24000,
 
+  "_interval_comment": "How often the wrapper actually fires the writer, in hours. The cron polls more frequently; runs that come too soon are skipped. Set 0 to disable gating (run every tick). The bot can edit this value herself via writes:.",
+  "journal_interval_hours": 24,
+
   "_email_comment": "SMTP for outbound journal emails and email-action tasks. Optional; omit if the bot doesn't send.",
   "smtp_server": "@@SMTP_HOST@@",
   "smtp_port": 465,
