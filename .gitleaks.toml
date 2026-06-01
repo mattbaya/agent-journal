@@ -1,0 +1,32 @@
+title = "ralph-agent gitleaks config"
+
+# Extend gitleaks' built-in default ruleset (Anthropic keys, GitHub PATs,
+# AWS keys, SSH private keys, etc.). Without this `[extend]` block,
+# supplying --config would REPLACE the defaults entirely and the scan
+# would have no detection rules at all.
+[extend]
+useDefault = true
+
+# The [allowlist] below carves out known-OK paths and patterns so the
+# pre-commit hook doesn't reject legitimate content.
+[allowlist]
+description = "ralph-agent intentional placeholders + honeypot bait + mirrored docs"
+
+paths = [
+    # Honeypot tripwire bait — intentional fake secrets used to detect
+    # agent exfiltration. AWS's own published example values, deliberate.
+    '''fleet-infra/honeypot/install_honeypot_tripwires\.sh''',
+    # Mirrored from /opt/share/ — contains curl examples with literal
+    # "YOUR_TOKEN" / "YOUR_API_KEY" placeholders. opt-share/ is
+    # auto-synced multi-user content; if real secrets land there they
+    # should be cleaned at the source, not via this config.
+    '''opt-share/bot-fleet-analysis/.*''',
+]
+
+regexes = [
+    # Placeholder strings used in documentation examples
+    '''YOUR_(API_KEY|TOKEN|SECRET)''',
+    '''<API_KEY>''',
+    '''<example-value>''',
+    '''<placeholder.*>''',
+]
