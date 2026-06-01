@@ -815,37 +815,43 @@ def regenerate_site(index: list) -> None:
 # Interval gating
 # ---------------------------------------------------------------------------
 
-def _interval_check(now: datetime) -> tuple:
-    """Return (should_run, reason). Reads `journal_interval_hours` from
-    CONFIG (default 24); compares now against the timestamp stored in
-    LAST_RUN_PATH. The bot can edit `journal_interval_hours` in her own
-    config.json via a `writes:` block — the next wrapper tick honors
-    the new value.
+def _schedule_check(now: datetime) -> tuple:
+    """Return (should_run, reason). Fires once per day at the first tick
+    on/after `journal_run_hour` (local time) from CONFIG (default 6).
+    Compares now against today's scheduled boundary and the timestamp in
+    LAST_RUN_PATH. The bot can edit `journal_run_hour` in his own
+    config.json via a `writes:` block; the next wrapper tick honors it.
 
-    journal_interval_hours = 0 means "run every tick, no gating" (useful
-    for trigger-driven setups where the wrapper is invoked only when a
-    trigger fires).
+    journal_run_hour = -1 disables gating (run every tick) for
+    trigger-driven setups.
     """
-    raw = CONFIG.get("journal_interval_hours", 24)
+    raw = CONFIG.get("journal_run_hour", 6)
     try:
-        interval_secs = int(float(raw) * 3600)
+        run_hour = int(raw)
     except (TypeError, ValueError):
-        log(f"invalid journal_interval_hours={raw!r}; falling back to 24")
-        interval_secs = 24 * 3600
-    if interval_secs <= 0:
-        return True, "journal_interval_hours <= 0 (no gating)"
+        log(f"invalid journal_run_hour={raw!r}; falling back to 6")
+        run_hour = 6
+    if run_hour < 0:
+        return True, "journal_run_hour < 0 (no gating)"
+    if run_hour > 23:
+        log(f"journal_run_hour={run_hour} out of range; clamping to 6")
+        run_hour = 6
+    boundary = now.replace(hour=run_hour, minute=0, second=0, microsecond=0)
+    if now < boundary:
+        return False, (f"before today's scheduled hour {run_hour:02d}:00 "
+                       f"(now {now.strftime('%H:%M')})")
+    boundary_ts = int(boundary.timestamp())
     if not LAST_RUN_PATH.exists():
-        return True, "no prior run recorded"
+        return True, f"no prior run recorded; past {run_hour:02d}:00 boundary"
     try:
         last = int(LAST_RUN_PATH.read_text().strip())
     except (ValueError, OSError):
         return True, "stale or unreadable .last-journal-run; will overwrite"
-    elapsed = int(now.timestamp()) - last
-    if elapsed >= interval_secs:
-        return True, f"elapsed {elapsed}s >= interval {interval_secs}s"
-    remaining = interval_secs - elapsed
-    return False, (f"interval not elapsed: {remaining}s remaining of "
-                   f"{interval_secs}s (journal_interval_hours={raw})")
+    if last < boundary_ts:
+        return True, (f"past {run_hour:02d}:00 boundary; last run predates "
+                      f"it ({int(now.timestamp())-last}s ago)")
+    return False, (f"already ran today at/after {run_hour:02d}:00 "
+                   f"(last run {int(now.timestamp())-last}s ago)")
 
 
 def _record_run(now: datetime) -> None:
@@ -871,7 +877,7 @@ def main() -> int:
                     help="Hard cap on followup rounds; 0 (default) = no cap. "
                          "Use a positive value as an ops-level circuit breaker.")
     ap.add_argument("--force", action="store_true",
-                    help="Ignore journal_interval_hours gating and run now.")
+                    help="Ignore the daily schedule gating and run now.")
     args = ap.parse_args()
 
     CONFIG = load_config(Path(args.config))
@@ -887,14 +893,15 @@ def main() -> int:
 
     today = datetime.now()
 
-    # Interval gating: skip if it's been less than journal_interval_hours
-    # since the last successful run, unless --force is passed.
+    # Daily schedule gating: run once per day at/after journal_run_hour,
+    # unless --force is passed. A manual run on a prior day does not
+    # suppress today's scheduled run.
     if not args.force and not args.dry_run:
-        should_run, reason = _interval_check(today)
+        should_run, reason = _schedule_check(today)
         if not should_run:
             log(f"skip: {reason}")
             return 0
-        log(f"interval check: {reason}")
+        log(f"schedule check: {reason}")
 
     log(f"=== run start {today.isoformat()} backend={BACKEND.name} model={BACKEND.model} dry_run={args.dry_run} ===")
 

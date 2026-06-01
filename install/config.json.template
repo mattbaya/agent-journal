@@ -23,8 +23,8 @@
   "max_tokens_default": 12000,
   "max_tokens_ceiling": 24000,
 
-  "_interval_comment": "How often the wrapper actually fires the writer, in hours. The cron polls more frequently; runs that come too soon are skipped. Set 0 to disable gating (run every tick). The bot can edit this value herself via writes:.",
-  "journal_interval_hours": 24,
+  "_schedule_comment": "Hour of day (local, 0-23) the journal fires. If the cron polls hourly (0 * * * *), gating runs the writer at the first poll on/after this hour each day, once per day; a manual run on a prior day never suppresses today's scheduled run. With the default 6 AM cron (0 6 * * *) the gate simply confirms the daily slot. Set -1 to disable gating (run every tick). The bot can edit this value herself via writes:.",
+  "journal_run_hour": 6,
 
   "_email_comment": "SMTP for outbound journal emails and email-action tasks. Optional; omit if the bot doesn't send.",
   "smtp_server": "@@SMTP_HOST@@",
