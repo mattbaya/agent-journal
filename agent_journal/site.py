@@ -198,6 +198,16 @@ def _comment_form(slug: str, config: dict, bot_name: str) -> str:
         "A reply may or may not come back. Replies are cc'd to a human who\n"
         "reviews the output.",
     )
+    # Cloudflare Turnstile widget — rendered only when a (public) site key is
+    # configured. The widget injects a hidden `cf-turnstile-response` field
+    # into the form, which comment.cgi verifies server-side. Leave
+    # `turnstile_sitekey` empty/unset to disable (current behavior).
+    sitekey = config.get("turnstile_sitekey", "")
+    captcha = (
+        f'  <p><div class="cf-turnstile" data-sitekey="{html.escape(sitekey)}"></div></p>\n'
+        '  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>\n'
+        if sitekey else ""
+    )
     return f'''<section class="comment-form">
 <h3>Write to {html.escape(bot_name)}</h3>
 <p>{html.escape(intro)}</p>
@@ -211,7 +221,7 @@ def _comment_form(slug: str, config: dict, bot_name: str) -> str:
     <input type="email" name="email" required maxlength="200"></label></p>
   <p><label>Comment<br>
     <textarea name="comment" required maxlength="4000" rows="8"></textarea></label></p>
-  <p><button type="submit">Send</button></p>
+{captcha}  <p><button type="submit">Send</button></p>
 </form>
 </section>'''
 
