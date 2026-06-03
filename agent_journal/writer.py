@@ -63,6 +63,7 @@ SHELL_LOG_PATH: Path = None
 INVOCATIONS_LOG: Path = None
 SITE_DIR: Path = None
 WRITE_ROOTS: list = []
+RUNS_DIR: Path = None
 
 # Hard caps applied regardless of config
 SHELL_DEFAULT_TIMEOUT = 30
@@ -71,6 +72,37 @@ SHELL_STDOUT_CAP = 8000
 SHELL_STDERR_CAP = 2000
 READ_MAX_BYTES = 100_000
 RECENT_ENTRIES_IN_PROMPT = None  # None = no cap; show every past entry
+
+# --- victory condition + anti-runaway controls ----------------------------
+# The writer loops until it PUBLISHES a finished, self-reviewed entry. There
+# are NO quality caps — extra rounds are cheap and expected. The only ways a
+# run stops short of publishing are the two safety guards below, which exist
+# solely to stop a wedged backend from looping forever / overrunning the cron
+# slot. When a guard trips, the run saves its transcript to logs/runs/ and
+# exits non-zero WITHOUT recording the day's run, so the next hourly tick
+# resumes (and picks the draft back up via the "Where you left off" block).
+NO_PROGRESS_LIMIT = 3            # consecutive empty/identical rounds -> stop & resume
+DEFAULT_MAX_RUN_SECONDS = 1800   # wall-clock runaway guard (config: max_run_seconds)
+MAX_KEPT_RUN_TRANSCRIPTS = 60    # prune logs/runs/ to the newest N
+STORED_RESPONSE_CAP = 30_000     # per-transcript text cap
+MIN_BODY_CHARS = 200             # shorter than this -> body treated as unfinished
+
+# Titles that signal the model never actually named the entry.
+PLACEHOLDER_TITLES = {"", "untitled", "title", "todo", "tbd",
+                      "your title here", "title here", "draft"}
+
+# Function words that, when an entry ENDS on them with no terminal
+# punctuation, are near-certain proof the text was cut off mid-sentence
+# (e.g. this morning's entry ended "...and the").
+DANGLING_WORDS = {
+    "the", "a", "an", "and", "or", "but", "nor", "so", "yet", "to", "of",
+    "in", "on", "at", "by", "for", "with", "as", "from", "into", "onto",
+    "that", "this", "these", "those", "is", "was", "were", "are", "be",
+    "been", "being", "am", "i", "we", "he", "she", "it", "they", "you",
+    "my", "our", "his", "her", "its", "their", "your", "which", "who",
+    "what", "when", "where", "while", "because", "if", "than", "then",
+    "about", "over", "under", "between", "through", "not", "no", "very",
+}
 
 
 def _inline_drafts(drafts: list, drafts_dir: Path) -> str:
@@ -122,6 +154,7 @@ def setup_paths(cfg: dict) -> None:
     global JOURNAL_DIR, PUBLISHED_DIR, DRAFTS_DIR, IDEAS_DIR, TOOLS_DIR
     global INDEX_PATH, CONTINUITY_PATH, PROMPT_PATH, SHELL_LOG_PATH
     global INVOCATIONS_LOG, SITE_DIR, LOG_PATH, LAST_RUN_PATH, WRITE_ROOTS
+    global RUNS_DIR
 
     JOURNAL_DIR = Path(cfg["journal_dir"]).resolve()
     PUBLISHED_DIR = JOURNAL_DIR / "published"
@@ -135,6 +168,7 @@ def setup_paths(cfg: dict) -> None:
     INVOCATIONS_LOG = JOURNAL_DIR / "logs" / "invocations.jsonl"
     LOG_PATH = JOURNAL_DIR / "logs" / "journal_writer.log"
     LAST_RUN_PATH = JOURNAL_DIR / "logs" / ".last-journal-run"
+    RUNS_DIR = JOURNAL_DIR / "logs" / "runs"
     SITE_DIR = Path(cfg["web_dir"]).resolve() if cfg.get("web_dir") else None
     # Sandbox roots, in order of preference:
     #   - the journal dir itself (always)
@@ -860,6 +894,197 @@ def _record_run(now: datetime) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Structural validation — catch truncated / unfinished entries BEFORE they
+# can be published. This is the mechanical half of the victory condition;
+# the self-review pass below is the judgment half.
+# ---------------------------------------------------------------------------
+
+def looks_truncated(body: str):
+    """Return a problem string if `body` looks cut off mid-thought, else None.
+
+    High-confidence signals: unbalanced ``` fences; ending on a dangling
+    function word with no terminal punctuation. Medium-confidence catch-all:
+    ends on an alphanumeric/clause-punctuation char with no sentence-ending
+    punctuation (excluding markdown headings / table rows, which legitimately
+    end without a period)."""
+    s = (body or "").rstrip()
+    if not s:
+        return "body is empty"
+    if s.count("```") % 2 != 0:
+        return "unbalanced code fence (odd number of ```) — entry was cut off inside a code block"
+    last = s[-1]
+    TERMINAL = ".!?\"')]}`*_>~:"  # ':' allowed only when followed by a block; handled below
+    last_line = s.splitlines()[-1].strip()
+    # Markdown structural lines legitimately lack sentence punctuation.
+    if last_line.startswith("#") or (last_line and set(last_line) <= set("|-: ")):
+        return None
+    m = re.search(r"([A-Za-z']+)\s*$", s)
+    last_word = (m.group(1).lower() if m else "")
+    if last in ".!?":
+        return None
+    if last_word in DANGLING_WORDS:
+        return (f"ends on the dangling word {last_word!r} with no terminal "
+                "punctuation — almost certainly cut off mid-sentence")
+    if last not in TERMINAL and (last.isalnum() or last in ",;-—–"):
+        return "does not end with terminal punctuation (.!?) — may be cut off mid-sentence"
+    return None
+
+
+def validate_entry(fm: dict, raw_body: str, body_clean: str) -> list:
+    """Mechanical publishability checks. Returns a list of problem strings;
+    empty list means the entry is structurally sound."""
+    problems = []
+    title = str((fm or {}).get("title", "")).strip()
+    if not fm or not title:
+        problems.append("missing or empty frontmatter title")
+    elif title.lower() in PLACEHOLDER_TITLES:
+        problems.append(f"placeholder title {title!r} — give the entry a real title")
+    # Unterminated <!-- ... --> block: the exact failure that leaked a raw
+    # SIDECAR into this morning's published entry. An open comment with no
+    # closing --> means the output was cut off mid-block.
+    if raw_body.count("<!--") != raw_body.count("-->"):
+        problems.append("unterminated <!-- ... --> block (a SIDECAR/RESEARCH "
+                        "comment was cut off before its closing -->)")
+    if len(body_clean.strip()) < MIN_BODY_CHARS:
+        problems.append(f"body is only {len(body_clean.strip())} chars "
+                        f"(minimum {MIN_BODY_CHARS}) — looks unfinished")
+    trunc = looks_truncated(body_clean)
+    if trunc:
+        problems.append(trunc)
+    return problems
+
+
+def render_entry(title: str, date: str, tags: list, summary: str,
+                 body_clean: str) -> str:
+    """Build the exact markdown that will be published. Used both for the
+    self-review preview and the final write, so what the model approves is
+    byte-for-byte what lands on disk."""
+    return (
+        "---\n"
+        + f"title: {json.dumps(title)}\n"
+        + f"date: {date}\n"
+        + "tags: " + json.dumps(tags) + "\n"
+        + f"summary: {json.dumps(summary)}\n"
+        + "---\n\n"
+        + body_clean
+    )
+
+
+def self_review(rendered: str, round_label: str):
+    """Force the model to re-read the entry exactly as it will be published
+    and either approve it or return a corrected full entry.
+
+    Returns (approved: bool, revised_text: str|None)."""
+    review_prompt = (
+        "You are proofreading the journal entry you just wrote, shown below "
+        "EXACTLY as it will be published. Read it slowly, start to finish.\n\n"
+        "--- BEGIN ENTRY AS IT WILL BE PUBLISHED ---\n"
+        + rendered
+        + "\n--- END ENTRY ---\n\n"
+        "Check carefully:\n"
+        "- Is it COMPLETE — not cut off mid-sentence or mid-word? The final "
+        "sentence must actually finish.\n"
+        "- Is the grammar correct and the prose readable end to end?\n"
+        "- Do the title, tags, and summary match what the body actually says?\n"
+        "- Are all code fences and lists closed, and is there no stray markup?\n\n"
+        "If the entry is finished and correct, reply with EXACTLY this line and "
+        "nothing else:\n"
+        "VERDICT: APPROVED\n\n"
+        "If anything is wrong, reply with:\n"
+        "VERDICT: REVISE\n"
+        "then the COMPLETE corrected entry — the opening ---, full frontmatter "
+        "(title/date/tags/summary), the closing ---, and the finished body — "
+        "ready to publish, with no other commentary."
+    )
+    resp = call_backend(review_prompt,
+                        label=f"{CONFIG['bot_name']}_journal_review_{round_label}")
+    if re.search(r"(?is)VERDICT:\s*REVISE\b", resp):
+        m = re.search(r"(?is)VERDICT:\s*REVISE\b[ \t]*\n?", resp)
+        revised = resp[m.end():].strip() if m else ""
+        return False, revised
+    if re.search(r"(?is)VERDICT:\s*APPROVED\b", resp):
+        return True, None
+    # No clear verdict: treat the whole response as a fresh candidate so it
+    # gets re-validated (and, if it lacks frontmatter, bounced for a redo).
+    return False, resp
+
+
+# ---------------------------------------------------------------------------
+# Run transcripts — resume residue lives here, NOT in drafts/. A guard-tripped
+# run drops its last draft here; the next tick reads it back via the
+# "Where you left off" prompt block so the re-fire continues instead of
+# confabulating from scratch.
+# ---------------------------------------------------------------------------
+
+def save_run_transcript(status: str, rounds: int, last_text: str) -> None:
+    try:
+        RUNS_DIR.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(timezone.utc)
+        rec = {
+            "ts": now.isoformat(),
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "status": status,
+            "rounds": rounds,
+            "last_text": (last_text or "")[:STORED_RESPONSE_CAP],
+        }
+        fname = now.strftime("%Y%m%dT%H%M%SZ") + f"-{status}.json"
+        (RUNS_DIR / fname).write_text(json.dumps(rec, indent=2))
+        prune_run_transcripts()
+        log(f"saved run transcript: {RUNS_DIR / fname}")
+    except OSError as e:
+        log(f"WARN: could not save run transcript: {e}")
+
+
+def prune_run_transcripts() -> None:
+    try:
+        files = sorted(RUNS_DIR.glob("*.json"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+        for f in files[MAX_KEPT_RUN_TRANSCRIPTS:]:
+            try:
+                f.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def load_resume_block(today: datetime) -> str:
+    """If an earlier run TODAY stopped before publishing, surface its last
+    draft so this run continues from it. Returns '' if none."""
+    if not RUNS_DIR or not RUNS_DIR.exists():
+        return ""
+    today_str = today.strftime("%Y-%m-%d")
+    candidates = []
+    for f in RUNS_DIR.glob("*.json"):
+        try:
+            rec = json.loads(f.read_text())
+        except Exception:
+            continue
+        if (str(rec.get("status", "")).startswith("incomplete")
+                and rec.get("date") == today_str and rec.get("last_text")):
+            candidates.append((rec.get("ts", ""), rec))
+    if not candidates:
+        return ""
+    candidates.sort(reverse=True)
+    rec = candidates[0][1]
+    return (
+        "# Where you left off (an earlier attempt today did not finish)\n\n"
+        "A run earlier today started this entry but was stopped by a safety "
+        "guard before it could be published. Below is the last draft from "
+        "that attempt. Continue from it — finish and publish a COMPLETE entry. "
+        "Do not start over from scratch if this draft is usable.\n\n"
+        "--- BEGIN PRIOR INCOMPLETE DRAFT ---\n"
+        + rec["last_text"]
+        + "\n--- END PRIOR INCOMPLETE DRAFT ---\n"
+    )
+
+
+def _gkey(kind: str, val: str) -> str:
+    """Normalized dedup key for a gathering request (research/read/shell)."""
+    return kind + ":" + " ".join((val or "").split()).lower()
+
+
+# ---------------------------------------------------------------------------
 # main()
 # ---------------------------------------------------------------------------
 
@@ -874,8 +1099,9 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true",
                     help="Write to drafts/ instead of published/; no commit, no site")
     ap.add_argument("--max-research-rounds", type=int, default=0,
-                    help="Hard cap on followup rounds; 0 (default) = no cap. "
-                         "Use a positive value as an ops-level circuit breaker.")
+                    help="Ops-only hard ceiling on total backend rounds; 0 "
+                         "(default) = no cap. NOT a quality knob — when hit, the "
+                         "run saves its transcript and exits to resume next tick.")
     ap.add_argument("--force", action="store_true",
                     help="Ignore the daily schedule gating and run now.")
     args = ap.parse_args()
@@ -913,108 +1139,173 @@ def main() -> int:
 
     prompt = build_prompt(today, past_entries, continuity, drafts, ideas, tools)
 
+    # If an earlier attempt today stopped short of publishing, continue from
+    # its last draft rather than starting cold.
+    resume_block = load_resume_block(today)
+    if resume_block:
+        prompt = prompt + "\n\n" + resume_block
+        log("injected 'Where you left off' block from a prior incomplete attempt today")
+
+    max_run_seconds = int(CONFIG.get("max_run_seconds", DEFAULT_MAX_RUN_SECONDS) or 0)
+    deadline = (time.time() + max_run_seconds) if max_run_seconds > 0 else None
+
     text = call_backend(prompt, label=f"{CONFIG['bot_name']}_journal")
     log(f"first-pass response: {len(text)} chars")
 
-    # Followup rounds for research/reads/shell
+    # ---- Victory loop --------------------------------------------------
+    # Terminal state = a PUBLISHED entry. The loop only ends short of that on
+    # a safety guard (wall-clock / no-progress / ops ceiling), which saves a
+    # transcript and resumes next tick. Each round either (a) serves a new
+    # gathering request, (b) bounces a structurally-broken draft for a redo,
+    # or (c) runs the forced self-review and publishes on approval.
+    served = set()          # gathering requests already answered (dedup)
     rounds = 0
+    no_progress = 0
+    prev_norm = None
+    # These hold the approved candidate once the loop breaks.
+    fm = title = tags = summary = sidecar = body_clean = slug = None
+
     while True:
+        # --- safety guards (NOT quality caps) ---
+        if deadline and time.time() > deadline:
+            log(f"GUARD: wall-clock {max_run_seconds}s exceeded after {rounds} "
+                "rounds — saving transcript, resuming next tick")
+            save_run_transcript("incomplete-timeout", rounds, text)
+            return 3
+        norm = (text or "").strip()
+        if not norm or norm == prev_norm:
+            no_progress += 1
+            log(f"GUARD: no-progress round {no_progress}/{NO_PROGRESS_LIMIT} "
+                "(empty or identical to previous output)")
+            if no_progress >= NO_PROGRESS_LIMIT:
+                log("GUARD: no-progress limit — saving transcript, resuming next tick")
+                save_run_transcript("incomplete-stalled", rounds, text)
+                return 3
+        else:
+            no_progress = 0
+        prev_norm = norm
+        if args.max_research_rounds and rounds >= args.max_research_rounds:
+            log(f"GUARD: --max-research-rounds {args.max_research_rounds} reached "
+                "— saving transcript, resuming next tick")
+            save_run_transcript("incomplete-roundcap", rounds, text)
+            return 3
+
+        # --- (a) gathering: research / reads / shell, deduped ---
         queries = parse_research_block(text)
         partial = parse_sidecar_block(text) if "<!--" in text else {}
         reads = partial.get("reads", []) if isinstance(partial, dict) else []
         shells = partial.get("shell", []) if isinstance(partial, dict) else []
-        if not queries and not reads and not shells:
-            break
-        extras = []
-        if queries:
-            extras.append(run_research(queries))
-        if reads:
-            r = safe_read_paths(reads)
-            b = ["# Files you asked to read", ""]
-            for item in r:
-                b.append(f"## {item['path']}")
-                b.append("```" if item["ok"] else "")
-                b.append(item["content"])
-                if item["ok"]:
-                    b.append("```")
-                b.append("")
-            extras.append("\n".join(b))
-        if shells:
-            shell_out = safe_run_shell(shells)
-            b = ["# Shell commands you ran", ""]
-            for r in shell_out:
-                b.append(f"## $ {r['cmd']}")
-                b.append(f"exit={r['exit_code']}  {r['duration_ms']}ms"
-                         + ("  TIMED OUT" if r.get("timed_out") else ""))
-                if r["stdout"]:
-                    b.append("stdout:")
-                    b.append("```")
-                    b.append(r["stdout"])
-                    b.append("```")
-                if r["stderr"]:
-                    b.append("stderr:")
-                    b.append("```")
-                    b.append(r["stderr"])
-                    b.append("```")
-                b.append("")
-            extras.append("\n".join(b))
-        if args.max_research_rounds and rounds + 1 >= args.max_research_rounds:
-            floor_text = (
-                "\n\nThis is your last round — the --max-research-rounds "
-                f"circuit breaker ({args.max_research_rounds}) has been reached. "
-                "Any further RESEARCH/reads:/shell: blocks will be ignored — "
-                "write the final entry now."
+        new_queries = [q for q in queries if _gkey("research", q["query"]) not in served]
+        new_reads = [r for r in reads if _gkey("read", r.get("path", "")) not in served]
+        new_shells = [s for s in shells if _gkey("shell", s.get("cmd", "")) not in served]
+
+        if new_queries or new_reads or new_shells:
+            extras = []
+            if new_queries:
+                extras.append(run_research(new_queries))
+                for q in new_queries:
+                    served.add(_gkey("research", q["query"]))
+            if new_reads:
+                r = safe_read_paths(new_reads)
+                b = ["# Files you asked to read", ""]
+                for item in r:
+                    b.append(f"## {item['path']}")
+                    b.append("```" if item["ok"] else "")
+                    b.append(item["content"])
+                    if item["ok"]:
+                        b.append("```")
+                    b.append("")
+                extras.append("\n".join(b))
+                for rd in new_reads:
+                    served.add(_gkey("read", rd.get("path", "")))
+            if new_shells:
+                shell_out = safe_run_shell(new_shells)
+                b = ["# Shell commands you ran", ""]
+                for r in shell_out:
+                    b.append(f"## $ {r['cmd']}")
+                    b.append(f"exit={r['exit_code']}  {r['duration_ms']}ms"
+                             + ("  TIMED OUT" if r.get("timed_out") else ""))
+                    if r["stdout"]:
+                        b += ["stdout:", "```", r["stdout"], "```"]
+                    if r["stderr"]:
+                        b += ["stderr:", "```", r["stderr"], "```"]
+                    b.append("")
+                extras.append("\n".join(b))
+                for sh in new_shells:
+                    served.add(_gkey("shell", sh.get("cmd", "")))
+            followup = (
+                prompt + "\n\n# Your latest output\n\n" + text + "\n\n"
+                + "\n\n".join(extras)
+                + "\n\nUse the material above. If you genuinely need more, request "
+                "it and another round will follow. Otherwise write the COMPLETE "
+                "final entry now — full frontmatter and a finished body, every "
+                "<!-- ... --> block closed with -->. Do NOT re-request material "
+                "you already received above."
             )
-        else:
-            floor_text = (
-                "\n\nIf you still need more material, request it and there "
-                "will be another round. Otherwise write the final entry now."
+            text = call_backend(followup, label=f"{CONFIG['bot_name']}_journal_gather{rounds+1}")
+            rounds += 1
+            log(f"gather round {rounds}: {len(text)} chars")
+            continue
+
+        # --- (b) structural validation of the candidate entry ---
+        fm, raw_body = parse_frontmatter(text)
+        sidecar = parse_sidecar_block(raw_body)
+        body_clean = re.sub(r"<!--\s*(RESEARCH|SIDECAR)\b.*?-->", "", raw_body, flags=re.S)
+        body_clean = re.sub(r"\n```\s*$", "\n", body_clean).strip() + "\n"
+
+        problems = validate_entry(fm, raw_body, body_clean)
+        if problems:
+            plist = "\n".join(f"- {p}" for p in problems)
+            log(f"structural validation FAILED (round {rounds}): {problems}")
+            followup = (
+                prompt + "\n\n# Your latest output\n\n" + text
+                + "\n\n# This draft is NOT publishable yet\n\n"
+                "A mechanical check found these problems:\n" + plist
+                + "\n\nRe-output the COMPLETE entry, fixed: valid frontmatter "
+                "(title/date/tags/summary), a body that ends with a complete "
+                "sentence, balanced ``` fences, and every <!-- SIDECAR --> / "
+                "<!-- RESEARCH --> block closed with -->. Output the whole "
+                "entry, not a diff or a description of the fix."
             )
-        followup = (prompt + "\n\n# Your first-pass output\n\n" + text + "\n\n"
-                    + "\n\n".join(extras)
-                    + floor_text)
-        text = call_backend(followup, label=f"{CONFIG['bot_name']}_journal_round{rounds+2}")
-        log(f"post-followup response: {len(text)} chars (round {rounds + 1} complete)")
+            text = call_backend(followup, label=f"{CONFIG['bot_name']}_journal_fix{rounds+1}")
+            rounds += 1
+            continue
+
+        # --- (c) forced self-review: re-read exactly what will publish ---
+        fm = stamp_canonical_date(fm, today.strftime("%Y-%m-%d"))
+        title = fm.get("title", "Untitled")
+        tags = fm.get("tags") if isinstance(fm.get("tags"), list) else []
+        summary = fm.get("summary", "")
+        slug = (sidecar.get("output_meta") or {}).get("slug") or slugify(title)
+        rendered = render_entry(title, fm["date"], tags, summary, body_clean)
+
+        approved, revised = self_review(rendered, str(rounds + 1))
         rounds += 1
-        if args.max_research_rounds and rounds >= args.max_research_rounds:
-            log(f"hit --max-research-rounds cap of {args.max_research_rounds}; forcing exit")
+        if approved:
+            log("self-review: APPROVED — publishing")
             break
+        if revised and revised.strip():
+            log(f"self-review: REVISE — applying {len(revised)} char correction")
+            text = revised
+        else:
+            log("self-review: REVISE but no corrected entry returned — requesting full re-output")
+            text = call_backend(
+                prompt + "\n\n# Re-write\n\nYour review found problems but did "
+                "not include a corrected entry. Output the COMPLETE corrected "
+                "entry now — frontmatter and finished body.",
+                label=f"{CONFIG['bot_name']}_journal_rewrite{rounds}")
+        continue
 
-    # Parse final entry
-    fm, body = parse_frontmatter(text)
-    if not fm or "title" not in fm:
-        log("ERROR: no valid frontmatter — saving raw to drafts/")
-        fallback = DRAFTS_DIR / f"{today.strftime('%Y-%m-%d')}-unparseable.md"
-        fallback.parent.mkdir(parents=True, exist_ok=True)
-        fallback.write_text(text)
-        return 2
-
-    fm = stamp_canonical_date(fm, today.strftime("%Y-%m-%d"))
-    title = fm.get("title", "Untitled")
-    tags = fm.get("tags") if isinstance(fm.get("tags"), list) else []
-    summary = fm.get("summary", "")
-
-    sidecar = parse_sidecar_block(body)
-    body_clean = re.sub(r"<!--\s*(RESEARCH|SIDECAR)\b.*?-->", "", body, flags=re.S)
-    body_clean = re.sub(r"\n```\s*$", "\n", body_clean).strip() + "\n"
-
-    slug = (sidecar.get("output_meta") or {}).get("slug") or slugify(title)
+    # ---- Publish the approved entry ------------------------------------
+    rendered = render_entry(title, fm["date"], tags, summary, body_clean)
     dest = (DRAFTS_DIR if args.dry_run else PUBLISHED_DIR) / f"{fm['date']}-{slug}.md"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(
-        "---\n"
-        + f'title: {json.dumps(title)}\n'
-        + f"date: {fm['date']}\n"
-        + "tags: " + json.dumps(tags) + "\n"
-        + f"summary: {json.dumps(summary)}\n"
-        + "---\n\n"
-        + body_clean
-    )
+    dest.write_text(rendered)
     log(f"wrote entry: {dest}")
 
-    # Side effects
+    # Side effects. Shell already ran (once, deduped) during gathering and was
+    # fed back to the model, so there is no separate publish-time shell pass.
     safe_apply_writes(sidecar.get("writes", []))
-    safe_run_shell(sidecar.get("shell", []))
     send_journal_emails(sidecar.get("emails", []))
     safe_persist_tasks(sidecar.get("tasks", []))
 
@@ -1029,7 +1320,7 @@ def main() -> int:
     save_index(past_entries)
     regenerate_site(past_entries)
     _record_run(today)
-    log("=== run done ===")
+    log(f"=== run done: published + self-reviewed after {rounds} rounds ===")
     return 0
 
 
