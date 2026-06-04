@@ -354,6 +354,10 @@ def build_prompt(today: datetime, past_entries: list, continuity: str,
         "agent_dir": CONFIG.get("agent_dir", "(no agent_dir configured — journal-only mode)"),
         "web_dir": CONFIG.get("web_dir", "(no web_dir configured)"),
         "journal_dir": CONFIG.get("journal_dir", ""),
+        # Per-bot chat-self backend description (openclaw vs Hermes file
+        # locations). Lives in config so the prompt.md itself stays identical
+        # across bots and just references $chat_sources.
+        "chat_sources": CONFIG.get("chat_sources", ""),
     }
 
     template = FALLBACK_PROMPT_TEMPLATE
