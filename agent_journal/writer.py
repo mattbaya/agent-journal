@@ -47,6 +47,7 @@ from .backends import load_backend
 # ---------------------------------------------------------------------------
 
 CONFIG: dict = {}
+CONFIG_PATH: Path = None
 SECRETS: dict = {}
 BACKEND = None
 LOG_PATH: Path = None
@@ -1010,6 +1011,122 @@ def self_review(rendered: str, round_label: str):
 
 
 # ---------------------------------------------------------------------------
+# Presentation self-check. self_review() above proofreads the entry body, but
+# the site title + tagline (the byline a visitor sees at the top of EVERY
+# page) live in config.json and are rendered into the site chrome by site.py
+# — they never pass through self_review. This closes that gap: at close, a
+# cheap deterministic scan flags placeholder/leftover identity text, and only
+# when something looks unfinished does it ask the bot to author a real
+# replacement in its own voice. Once title+tagline are real, the scan passes
+# and no backend call is made — zero cost in steady state.
+# ---------------------------------------------------------------------------
+
+_PLACEHOLDER_MARKERS = (
+    "haven't written", "havent written", "see prompt", "prompt.md",
+    "placeholder", "lorem ipsum", "tagline here", "title here",
+    "your tagline", "your title", "fill in", "fill me", "write your",
+    "todo", "tktk", "tbd", "fixme", "xxx", "coming soon", "to be written",
+    "not written yet", "yet to be written",
+)
+
+
+def _looks_placeholder(value: str, default: str = "") -> bool:
+    """True if a site identity string is empty, a known default, or carries an
+    obvious placeholder marker."""
+    if not value:
+        return True
+    v = value.strip()
+    if not v:
+        return True
+    if default and v == default.strip():
+        return True
+    low = v.lower()
+    return any(m in low for m in _PLACEHOLDER_MARKERS)
+
+
+def _write_config_key(key: str, value: str) -> bool:
+    """Surgically update a single key in config.json (disk + live CONFIG). We
+    apply the change ourselves instead of letting the model rewrite the whole
+    file, so a bad emit can't corrupt config. Returns True on success."""
+    if not CONFIG_PATH:
+        return False
+    try:
+        data = json.loads(CONFIG_PATH.read_text())
+        data[key] = value
+        CONFIG_PATH.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+        CONFIG[key] = value
+        return True
+    except (OSError, ValueError) as e:
+        log(f"WARN: could not update config key {key!r}: {e}")
+        return False
+
+
+def presentation_self_check() -> None:
+    """Before closing, have the bot look at its own public site header (title +
+    tagline) the way a visitor sees it, and replace any placeholder/unfinished
+    identity text with something it authors itself. No backend call when both
+    already look real."""
+    if not SITE_DIR:
+        return
+    from .site import DEFAULT_TITLE, DEFAULT_TAGLINE
+    site_title = (CONFIG.get("site_title") or "").strip()
+    site_tagline = (CONFIG.get("site_tagline") or "").strip()
+
+    flagged_title = _looks_placeholder(site_title, DEFAULT_TITLE)
+    flagged_tagline = _looks_placeholder(site_tagline, DEFAULT_TAGLINE)
+    if not (flagged_title or flagged_tagline):
+        log("presentation check: site title + tagline OK")
+        return
+
+    which = ", ".join(
+        w for w, f in (("title", flagged_title), ("tagline", flagged_tagline)) if f)
+    log(f"presentation check: placeholder identity text detected ({which}) — "
+        f"asking {CONFIG.get('bot_name', 'bot')} to author a real one")
+
+    review_prompt = (
+        "You are about to close today's journal run. First, look at the TOP OF "
+        "YOUR PUBLISHED WEBSITE — this header sits above every entry, and a "
+        "visitor reads it before a single word you wrote:\n\n"
+        f"  SITE TITLE:       {site_title or '(empty)'}\n"
+        f"  TAGLINE / BYLINE: {site_tagline or '(empty)'}\n\n"
+        "At least one of these is still placeholder or setup text (it refers to "
+        "your prompt, says it isn't written yet, is a generic default, or is "
+        "blank). This is your public identity — make it really yours.\n\n"
+        "If a value is already real and finished, do NOT change it.\n\n"
+        "Reply with ONLY the line(s) you are changing, each on its own line, "
+        "using EXACTLY these labels:\n"
+        "TITLE: <your real site title>\n"
+        "TAGLINE: <your real one-line tagline / byline>\n\n"
+        "Write them as yourself — no quotes, no commentary, no markdown. If by "
+        "some chance both are already fine, reply with exactly: DONE"
+    )
+    resp = call_backend(
+        review_prompt,
+        label=f"{CONFIG.get('bot_name', 'bot')}_presentation_check")
+
+    changed = []
+    mt = re.search(r"(?im)^\s*TITLE:\s*(.+?)\s*$", resp)
+    if mt and flagged_title:
+        new_title = mt.group(1).strip().strip('"').strip()
+        if new_title and not _looks_placeholder(new_title, DEFAULT_TITLE):
+            if _write_config_key("site_title", new_title):
+                changed.append(f"site_title -> {new_title!r}")
+    mg = re.search(r"(?im)^\s*TAGLINE:\s*(.+?)\s*$", resp)
+    if mg and flagged_tagline:
+        new_tagline = mg.group(1).strip().strip('"').strip()
+        if new_tagline and not _looks_placeholder(new_tagline, DEFAULT_TAGLINE):
+            if _write_config_key("site_tagline", new_tagline):
+                changed.append(f"site_tagline -> {new_tagline!r}")
+
+    if changed:
+        log("presentation check: updated " + "; ".join(changed))
+    else:
+        log("presentation check: no usable replacement returned (still "
+            "placeholder) — leaving identity text for the bot to fix next run")
+
+
+# ---------------------------------------------------------------------------
 # Run transcripts — resume residue lives here, NOT in drafts/. A guard-tripped
 # run drops its last draft here; the next tick reads it back via the
 # "Where you left off" prompt block so the re-fire continues instead of
@@ -1089,7 +1206,7 @@ def _gkey(kind: str, val: str) -> str:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    global CONFIG, SECRETS, BACKEND
+    global CONFIG, CONFIG_PATH, SECRETS, BACKEND
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True, help="Path to config.json")
@@ -1107,6 +1224,7 @@ def main() -> int:
     args = ap.parse_args()
 
     CONFIG = load_config(Path(args.config))
+    CONFIG_PATH = Path(args.config)
     if args.secrets_stdin:
         SECRETS = load_secrets_from_stdin()
     elif args.secrets_file:
@@ -1318,6 +1436,7 @@ def main() -> int:
         "tags": tags, "summary": summary,
     })
     save_index(past_entries)
+    presentation_self_check()
     regenerate_site(past_entries)
     _record_run(today)
     log(f"=== run done: published + self-reviewed after {rounds} rounds ===")
