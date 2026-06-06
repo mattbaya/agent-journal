@@ -763,7 +763,10 @@ def safe_persist_tasks(tasks_list: list) -> list:
     pending_dir = JOURNAL_DIR / "tasks" / "pending"
     pending_dir.mkdir(parents=True, exist_ok=True)
     written = []
-    valid_actions = {"publish", "draft", "tools", "update_continuity", "email"}
+    # "agent" is a tool-capable self-delegation action: it persists here like
+    # any other, but the text-only task_runner.py SKIPS it — ralph's
+    # journal_task_bridge.py executes it with full tools, sandboxed, as the bot.
+    valid_actions = {"publish", "draft", "tools", "update_continuity", "email", "agent"}
     for item in tasks_list or []:
         raw_id = (item.get("path") or "").strip()
         tid = re.sub(r"[^a-zA-Z0-9_-]", "-", raw_id)[:80].strip("-")

@@ -43,7 +43,13 @@ LOG_PATH: Path = None
 LOCK_PATH: Path = None
 INVOCATIONS_LOG: Path = None
 
-VALID_ACTIONS = {"publish", "draft", "tools", "update_continuity", "email"}
+# "agent" is a tool-capable self-delegation action handled OUT OF BAND by
+# ralph's journal_task_bridge.py (sudo, full shell/file tools, sandboxed). This
+# text-only runner recognizes it as valid but never executes it: agent tasks
+# are filtered out in main() and left in pending/ for the bridge to pick up.
+TEXT_ACTIONS = {"publish", "draft", "tools", "update_continuity", "email"}
+AGENT_ACTION = "agent"
+VALID_ACTIONS = TEXT_ACTIONS | {AGENT_ACTION}
 
 
 def setup_paths(cfg):
@@ -368,17 +374,26 @@ def main():
     now = datetime.now(timezone.utc)
     log(f"=== runner start {now.isoformat()} backend={BACKEND.name} ===")
     ready = []
+    agent_left = 0
     for tp in sorted(PENDING_DIR.glob("*.json")):
         try:
             task = json.loads(tp.read_text())
         except Exception:
+            continue
+        # Tool-capable self-delegation is executed by ralph's
+        # journal_task_bridge.py, never by this text-only runner. Leave such
+        # tasks untouched in pending/ (even under --force-id) so the bridge
+        # owns their scheduling + lifecycle.
+        if task.get("output_action") == AGENT_ACTION:
+            agent_left += 1
             continue
         if args.force_id and task.get("id") == args.force_id:
             ready.append(tp)
             continue
         if not args.force_id and is_ready(task, now):
             ready.append(tp)
-    log(f"  pending={len(list(PENDING_DIR.glob('*.json')))} ready={len(ready)}")
+    log(f"  pending={len(list(PENDING_DIR.glob('*.json')))} ready={len(ready)}"
+        + (f" agent_left={agent_left}" if agent_left else ""))
 
     for tp in ready:
         ok = run_task(tp, now, args.dry_run)
