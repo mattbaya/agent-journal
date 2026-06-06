@@ -23,6 +23,9 @@
   "max_tokens_default": 12000,
   "max_tokens_ceiling": 24000,
 
+  "_run_mode_comment": "Omit or 'normal' (default): the daily run researches AND publishes one entry. 'vision': the daily run is a Vision+Research pass — it picks an outward question, researches it, saves a brief to drafts/, and dispatches an output_action:'agent' Write task instead of publishing. A tool-capable Write pass (run by ralph's journal_task_bridge) then reads the brief and publishes the day's single entry via 'python3 -m agent_journal.publish'. Forces outward-facing writing by starving the Write pass of the bot's own history.",
+  "run_mode": "normal",
+
   "_schedule_comment": "Hour of day (local, 0-23) the journal fires. If the cron polls hourly (0 * * * *), gating runs the writer at the first poll on/after this hour each day, once per day; a manual run on a prior day never suppresses today's scheduled run. With the default 6 AM cron (0 6 * * *) the gate simply confirms the daily slot. Set -1 to disable gating (run every tick). The bot can edit this value herself via writes:.",
   "journal_run_hour": 6,
 

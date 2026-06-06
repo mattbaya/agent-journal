@@ -1290,6 +1290,12 @@ def main() -> int:
     # These hold the approved candidate once the loop breaks.
     fm = title = tags = summary = sidecar = body_clean = slug = None
 
+    # Vision mode (config: run_mode == "vision"): this run does NOT publish an
+    # entry. Its victory condition is dispatching a tool-capable Write task
+    # (output_action:"agent") plus the day's research brief — see the vision
+    # terminal branch inside the loop. Normal mode is unaffected.
+    VISION_MODE = CONFIG.get("run_mode") == "vision"
+
     while True:
         # --- safety guards (NOT quality caps) ---
         if deadline and time.time() > deadline:
@@ -1371,6 +1377,58 @@ def main() -> int:
             rounds += 1
             log(f"gather round {rounds}: {len(text)} chars")
             continue
+
+        # --- vision-mode terminal: dispatch a Write task, do NOT publish ---
+        # In vision mode the run's job is to research and hand a brief to its
+        # context-starved Write self (run later by ralph's journal_task_bridge),
+        # not to publish an entry here. Success = a `tasks:` sidecar carrying an
+        # output_action:"agent" Write task; the brief + continuity ride along as
+        # `writes:`. If the model hasn't dispatched yet, bounce it (same shape as
+        # the structural-validation re-prompt below).
+        if VISION_MODE:
+            v_sidecar = parse_sidecar_block(text) if "<!--" in text else {}
+            v_tasks = v_sidecar.get("tasks", []) if isinstance(v_sidecar, dict) else []
+            has_agent_task = False
+            for it in v_tasks:
+                try:
+                    payload = json.loads(it.get("content") or "")
+                except Exception:
+                    continue
+                if payload.get("output_action") == "agent":
+                    has_agent_task = True
+                    break
+            if not has_agent_task:
+                log(f"vision round {rounds}: no agent Write task yet — re-prompting")
+                followup = (
+                    prompt + "\n\n# Your latest output\n\n" + text
+                    + "\n\n# You have not dispatched the Write task yet\n\n"
+                    "This is a VISION pass: research and hand a brief to your Write "
+                    "self — do NOT publish a journal entry here. Finish by emitting a "
+                    "<!-- SIDECAR --> block containing:\n"
+                    "  - writes: journal/drafts/" + today.strftime("%Y-%m-%d") + "-brief.md  "
+                    "(your 150-350 word brief)\n"
+                    "  - writes: journal/continuity.md  (rewritten whole, with today's seed)\n"
+                    "  - tasks:  one task whose JSON has \"output_action\": \"agent\" and a "
+                    "\"prompt\" telling your Write self to read that brief and publish.\n"
+                    "Output that SIDECAR now. Do NOT output frontmatter or an entry body."
+                )
+                text = call_backend(followup, label=f"{CONFIG['bot_name']}_vision_dispatch{rounds+1}")
+                rounds += 1
+                continue
+            log("vision: agent Write task dispatched — persisting brief + task, "
+                "publishing NO entry")
+            safe_apply_writes(v_sidecar.get("writes", []))
+            send_journal_emails(v_sidecar.get("emails", []))
+            persisted = safe_persist_tasks(v_sidecar.get("tasks", []))
+            log(f"vision: persisted task(s): {persisted}")
+            if args.dry_run:
+                log("vision dry-run: skipping run-record + site regen")
+                return 0
+            _record_run(today)
+            regenerate_site(past_entries)
+            log(f"=== vision run done: brief + Write task dispatched after "
+                f"{rounds} rounds, no entry published ===")
+            return 0
 
         # --- (b) structural validation of the candidate entry ---
         fm, raw_body = parse_frontmatter(text)
