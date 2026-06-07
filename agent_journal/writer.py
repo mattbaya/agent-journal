@@ -926,6 +926,12 @@ def looks_truncated(body: str):
     # Markdown structural lines legitimately lack sentence punctuation.
     if last_line.startswith("#") or (last_line and set(last_line) <= set("|-: ")):
         return None
+    # A line ending in a bare URL is a citation / Sources entry — the
+    # template tells every bot to end with a "Sources" list of URLs, and a
+    # URL legitimately carries no terminal punctuation. Don't read it as a
+    # truncated sentence. (A truly cut-off prose line won't end in a URL.)
+    if re.search(r"https?://\S+$", last_line):
+        return None
     m = re.search(r"([A-Za-z']+)\s*$", s)
     last_word = (m.group(1).lower() if m else "")
     if last in ".!?":
