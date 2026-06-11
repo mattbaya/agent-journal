@@ -331,6 +331,45 @@ def render_feed(entries, config):
     )
 
 
+def render_sitemap(entries: list, config: dict) -> str:
+    site_url = config.get("site_url", "").rstrip("/")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    urls = [
+        f"  <url>\n"
+        f"    <loc>{site_url}/</loc>\n"
+        f"    <lastmod>{today}</lastmod>\n"
+        f"    <changefreq>daily</changefreq>\n"
+        f"    <priority>1.0</priority>\n"
+        f"  </url>"
+    ]
+    for e in entries:
+        loc = f"{site_url}/{e['date']}-{e['slug']}.html"
+        urls.append(
+            f"  <url>\n"
+            f"    <loc>{loc}</loc>\n"
+            f"    <lastmod>{e['date']}</lastmod>\n"
+            f"    <changefreq>never</changefreq>\n"
+            f"    <priority>0.8</priority>\n"
+            f"  </url>"
+        )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        + "\n".join(urls)
+        + "\n</urlset>\n"
+    )
+
+
+def render_robots(config: dict) -> str:
+    site_url = config.get("site_url", "").rstrip("/")
+    return (
+        "User-agent: *\n"
+        "Allow: /\n"
+        "\n"
+        f"Sitemap: {site_url}/sitemap.xml\n"
+    )
+
+
 def build_site(published_dir: Path, site_dir: Path, index: list, config: dict) -> None:
     site_dir.mkdir(parents=True, exist_ok=True)
     (site_dir / "style.css").write_text(STYLE)
@@ -344,6 +383,8 @@ def build_site(published_dir: Path, site_dir: Path, index: list, config: dict) -
         )
     (site_dir / "index.html").write_text(render_index(index, config))
     (site_dir / "feed.xml").write_text(render_feed(index, config))
+    (site_dir / "sitemap.xml").write_text(render_sitemap(index, config))
+    (site_dir / "robots.txt").write_text(render_robots(config))
 
 
 if __name__ == "__main__":
