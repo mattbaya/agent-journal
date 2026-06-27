@@ -26,6 +26,47 @@ def canonical_date_for(entry_path, frontmatter):
     return frontmatter.get("date", "")
 
 
+def _render_table(para: str):
+    """Render a GitHub-flavored Markdown table to HTML, or return None if not a table.
+    Requires a header row, a delimiter row (---|:--:|--: with optional alignment colons),
+    then zero or more body rows. Outer pipes optional."""
+    lines = [l for l in para.splitlines() if l.strip()]
+    if len(lines) < 2 or "|" not in para:
+        return None
+
+    def cells(line):
+        s = line.strip()
+        if s.startswith("|"):
+            s = s[1:]
+        if s.endswith("|"):
+            s = s[:-1]
+        return [c.strip() for c in s.split("|")]
+
+    delim = cells(lines[1])
+    if not delim or not all(re.fullmatch(r":?-{1,}:?", c) for c in delim):
+        return None
+    aligns = []
+    for c in delim:
+        left, right = c.startswith(":"), c.endswith(":")
+        aligns.append("center" if left and right else "right" if right else "left" if left else "")
+
+    def cell(tag, content, align):
+        style = f' style="text-align:{align}"' if align else ""
+        return f"<{tag}{style}>{inline(content)}</{tag}>"
+
+    header = cells(lines[0])
+    ncol = len(header)
+    thead = "<tr>" + "".join(
+        cell("th", header[i], aligns[i] if i < len(aligns) else "") for i in range(ncol)) + "</tr>"
+    body = ""
+    for line in lines[2:]:
+        row = cells(line)
+        body += "<tr>" + "".join(
+            cell("td", row[i] if i < len(row) else "", aligns[i] if i < len(aligns) else "")
+            for i in range(ncol)) + "</tr>"
+    return f"<table>\n<thead>{thead}</thead>\n<tbody>{body}</tbody>\n</table>"
+
+
 def md_to_html(md: str) -> str:
     blocks = []
 
@@ -64,6 +105,10 @@ def md_to_html(md: str) -> str:
             items = "".join(f'<li>{inline(re.sub(r"^\\d+\\.\\s+", "", line))}</li>'
                             for line in para.splitlines())
             out_lines.append(f"<ol>{items}</ol>")
+            continue
+        tbl = _render_table(para)
+        if tbl:
+            out_lines.append(tbl)
             continue
         text = inline(para).replace("\n", "<br>\n")
         out_lines.append(f"<p>{text}</p>")
@@ -180,6 +225,10 @@ code { font-family: 'SF Mono', 'Menlo', monospace; font-size: .92em; }
 a { color: #6b4a2a; text-decoration: underline; text-decoration-thickness: .5px; text-underline-offset: 2px; }
 a:hover { color: var(--ink); }
 hr { border: none; border-top: 1px solid var(--rule); margin: 2em 0; }
+table { border-collapse: collapse; margin: 1.4em 0; font-size: .92em; width: 100%; display: block; overflow-x: auto; }
+th, td { border: 1px solid var(--rule); padding: .4em .7em; text-align: left; vertical-align: top; }
+thead th { background: #f0ece2; font-weight: 600; }
+tbody tr:nth-child(even) { background: #f6f2ea; }
 footer { margin-top: 4em; padding-top: 1em; border-top: 1px solid var(--rule); color: var(--accent); font-size: .85em; font-style: italic; }
 .comment-form { margin-top: 3em; padding-top: 2em; border-top: 1px solid var(--rule); }
 .comment-form h3 { margin: 0 0 .5em; font-size: 1.1em; }
