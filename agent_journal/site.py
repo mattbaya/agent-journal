@@ -184,7 +184,7 @@ PAGE = """<!DOCTYPE html>
 <title>{title} — {site_title}</title>
 <link rel="stylesheet" href="/style.css">
 <link rel="alternate" type="application/rss+xml" title="{site_title}" href="/feed.xml">
-</head>
+{ga_head}</head>
 <body>
 <header>
   <h1><a href="/">{site_title}</a></h1>
@@ -301,6 +301,25 @@ def render_tags(tags):
     return " ".join(f'<a href="/?tag={html.escape(t)}">#{html.escape(t)}</a>' for t in tags)
 
 
+def _ga_head(config: dict) -> str:
+    """Return the Google Analytics (gtag.js) snippet for the <head>, or '' if no
+    measurement id is configured. Set config['ga_measurement_id'] = 'G-XXXXXXXX'
+    to activate. Blank/absent → no analytics emitted (safe default)."""
+    gid = (config.get("ga_measurement_id") or "").strip()
+    if not gid or not re.fullmatch(r"[A-Za-z0-9_-]{6,24}", gid):
+        return ""
+    return (
+        "<!-- Google tag (gtag.js) -->\n"
+        f'<script async src="https://www.googletagmanager.com/gtag/js?id={gid}"></script>\n'
+        "<script>\n"
+        "  window.dataLayer = window.dataLayer || [];\n"
+        "  function gtag(){dataLayer.push(arguments);}\n"
+        "  gtag('js', new Date());\n"
+        f"  gtag('config', '{gid}');\n"
+        "</script>\n"
+    )
+
+
 def render_entry_page(fm, body_html, slug, config):
     site_title = config.get("site_title", DEFAULT_TITLE)
     site_tagline = config.get("site_tagline", DEFAULT_TAGLINE)
@@ -328,6 +347,7 @@ def render_entry_page(fm, body_html, slug, config):
         date=date,
         body=article,
         email_footer=_email_footer(config),
+        ga_head=_ga_head(config),
     )
 
 
@@ -363,6 +383,7 @@ def render_index(entries, config):
         date=datetime.now().strftime("%Y-%m-%d"),
         body=body,
         email_footer=_email_footer(config),
+        ga_head=_ga_head(config),
     )
 
 
