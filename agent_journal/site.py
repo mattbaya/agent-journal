@@ -74,10 +74,22 @@ def md_to_html(md: str) -> str:
     return html_out
 
 
+def _linkify_bare(m):
+    """Wrap a bare http(s) URL in <a>, keeping trailing punctuation outside the link."""
+    url = m.group(1)
+    trail = ""
+    while url and url[-1] in ".,;:!?)]}'\"":
+        trail = url[-1] + trail
+        url = url[:-1]
+    return f'<a href="{url}">{url}</a>{trail}'
+
+
 def inline(text: str) -> str:
     text = html.escape(text)
     text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
     text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', text)
+    # auto-link bare URLs (skip those already inside an href= or as link text right after >)
+    text = re.sub(r'(?<![">])(https?://[^\s<>"]+)', _linkify_bare, text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
     text = re.sub(r"__([^_]+)__", r"<strong>\1</strong>", text)
     text = re.sub(r"(?<![\*_])\*([^*]+)\*(?![\*])", r"<em>\1</em>", text)
