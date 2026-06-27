@@ -90,10 +90,18 @@ def inline(text: str) -> str:
     text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', text)
     # auto-link bare URLs (skip those already inside an href= or as link text right after >)
     text = re.sub(r'(?<![">])(https?://[^\s<>"]+)', _linkify_bare, text)
+    # protect <a>...</a> spans so bold/italic passes don't mangle URLs (esp. underscores)
+    _links = []
+    def _stash(m):
+        _links.append(m.group(0))
+        return f"\x00LINK{len(_links) - 1}\x00"
+    text = re.sub(r'<a href="[^"]*">.*?</a>', _stash, text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
     text = re.sub(r"__([^_]+)__", r"<strong>\1</strong>", text)
     text = re.sub(r"(?<![\*_])\*([^*]+)\*(?![\*])", r"<em>\1</em>", text)
     text = re.sub(r"(?<![\*_])_([^_]+)_(?![_])", r"<em>\1</em>", text)
+    for i, l in enumerate(_links):
+        text = text.replace(f"\x00LINK{i}\x00", l)
     return text
 
 
