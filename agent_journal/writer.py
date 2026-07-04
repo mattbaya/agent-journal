@@ -323,6 +323,37 @@ Begin.
 """
 
 
+def _focus_note(shown: list) -> str:
+    """Make the writer consciously aware when it has been circling one theme, and
+    always pose the 'does another entry add real value?' question — WITHOUT
+    pushing it off the topic. Staying with a subject is allowed; hyperfocus is
+    allowed; the decision is entirely the writer's. This only surfaces the
+    pattern and asks the question. Returns '' when there's no history to reflect
+    on. (Matt, 2026-07-04: same topic from a fresh angle is NOT a problem — the
+    only thing we want is awareness + an honest value check.)"""
+    if not shown:
+        return ""
+    base = ("Look at your recent entries listed above. Staying with a subject for a "
+            "stretch — even hyperfocusing on it — is completely fine; sometimes a thread is "
+            "worth pulling for days. But before you commit to today's subject, ask yourself "
+            "honestly: will this entry add real value — a new angle, a new fact, a genuine "
+            "development — or would it mostly restate what you've already said? If it adds "
+            "value, pursue it wholeheartedly. If it wouldn't, pick a fresher subject instead. "
+            "This is your judgment to make, not a rule imposed on you.")
+    recent = shown[:5]
+    if len(recent) >= 3:
+        from collections import Counter
+        tags = Counter(t.strip().lower() for e in recent
+                       for t in (e.get("tags") or []) if t and t.strip())
+        if tags:
+            tag, n = tags.most_common(1)[0]
+            if n >= 3:
+                base = (f"Heads up — {n} of your last {len(recent)} entries carry the theme "
+                        f"“{tag}.” That's allowed, but make it a conscious choice. "
+                        + base)
+    return base
+
+
 def build_prompt(today: datetime, past_entries: list, continuity: str,
                  drafts: list, ideas: list, tools: list) -> str:
     inbox_block = build_inbox_block()
@@ -368,10 +399,19 @@ def build_prompt(today: datetime, past_entries: list, continuity: str,
             log(f"WARN: read {PROMPT_PATH} failed: {e} — using fallback")
 
     try:
-        return string.Template(template).safe_substitute(fields)
+        rendered = string.Template(template).safe_substitute(fields)
     except Exception as e:
         log(f"WARN: prompt substitution failed: {e} — fallback")
-        return string.Template(FALLBACK_PROMPT_TEMPLATE).safe_substitute(fields)
+        rendered = string.Template(FALLBACK_PROMPT_TEMPLATE).safe_substitute(fields)
+
+    # Topic self-awareness (not a rule): surface any recent-theme streak and pose
+    # the "am I adding value?" question, leaving the call to the writer.
+    focus = _focus_note(shown)
+    if focus:
+        rendered = (rendered.rstrip()
+                    + "\n\n---\n\n## A gut-check before you choose today's subject\n\n"
+                    + focus + "\n")
+    return rendered
 
 
 # ---------------------------------------------------------------------------
