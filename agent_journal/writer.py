@@ -1234,7 +1234,11 @@ def main() -> int:
                          "run saves its transcript and exits to resume next tick.")
     ap.add_argument("--force", action="store_true",
                     help="Ignore the daily schedule gating and run now.")
+    ap.add_argument("--as-of", dest="as_of", default=None,
+                    help="Backfill: override the entry date (YYYY-MM-DD). Implies --force.")
     args = ap.parse_args()
+    if args.as_of:
+        args.force = True
 
     CONFIG = load_config(Path(args.config))
     CONFIG_PATH = Path(args.config)
@@ -1248,7 +1252,8 @@ def main() -> int:
     setup_paths(CONFIG)
     BACKEND = load_backend(CONFIG, SECRETS)
 
-    today = datetime.now()
+    today = (datetime.strptime(args.as_of, "%Y-%m-%d").replace(hour=12)
+             if args.as_of else datetime.now())
 
     # Daily schedule gating: run once per day at/after journal_run_hour,
     # unless --force is passed. A manual run on a prior day does not
