@@ -368,11 +368,20 @@ def build_prompt(today: datetime, past_entries: list, continuity: str,
     else:
         past_block = "(no previous entries)"
 
+    personality_path = JOURNAL_DIR / "personality.md"
+    if personality_path.exists():
+        personality_block = personality_path.read_text(encoding="utf-8", errors="replace")
+    else:
+        personality_block = (
+            "(no journal/personality.md yet — create one if you want to anchor your voice)"
+        )
+
     fields = {
         "date": today.strftime("%Y-%m-%d"),
         "weekday": today.strftime("%A"),
         "past_count": str(len(shown)),
         "past_block": past_block,
+        "personality_block": personality_block,
         "continuity": (continuity or "").strip() or "(empty so far)",
         "drafts_block": _inline_drafts(drafts, DRAFTS_DIR),
         "ideas_block": "\n".join(f"- ideas/{f}" for f in ideas) or "(none)",
