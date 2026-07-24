@@ -460,13 +460,55 @@ def render_robots(config: dict) -> str:
     )
 
 
+def auto_link_previous_entries(body: str, current_slug: str, entries: list) -> str:
+    """Turn italic/bold previous-entry titles in source-list items into links.
+
+    Matches list items like:
+        - *Previous entry title* — some description
+        - _Previous entry title_ — some description
+        - **Previous entry title**
+    and replaces the title with a markdown link to the entry's HTML page when
+    the title matches a previous entry (case-insensitive).  Operates only on
+    lines that already look like a citation list item; it will not link random
+    mentions in body paragraphs.
+    """
+    if not entries:
+        return body
+    title_map = {}
+    for e in entries:
+        slug = e.get("slug", "")
+        if slug and slug != current_slug:
+            title_map[e.get("title", "").strip().lower()] = (
+                e.get("date", ""), slug, e.get("title", "").strip()
+            )
+    if not title_map:
+        return body
+
+    # marker group: * or ** or _ or __
+    item_re = re.compile(r'^(\s*[-*]\s+)(\*{1,2}|_{1,2})(.+?)\2(\s*—.*)?$')
+    out = []
+    for line in body.splitlines():
+        m = item_re.match(line)
+        if m:
+            prefix, marker, title, suffix = m.groups()
+            lookup = title.strip().lower()
+            if lookup in title_map:
+                date, slug, orig_title = title_map[lookup]
+                line = f"{prefix}[{marker}{orig_title}{marker}](/{date}-{slug}.html){suffix or ''}"
+        out.append(line)
+    return "\n".join(out)
+
+
 def build_site(published_dir: Path, site_dir: Path, index: list, config: dict) -> None:
     site_dir.mkdir(parents=True, exist_ok=True)
     (site_dir / "style.css").write_text(STYLE)
+    auto_link = config.get("auto_link_entries", False)
     for md_path in Path(published_dir).glob("*.md"):
         text = md_path.read_text()
         fm, body = parse_frontmatter(text)
         fm["date"] = canonical_date_for(md_path, fm)
+        if auto_link:
+            body = auto_link_previous_entries(body, md_path.stem, index)
         body_html = md_to_html(body.strip())
         (site_dir / (md_path.stem + ".html")).write_text(
             render_entry_page(fm, body_html, md_path.stem, config)
