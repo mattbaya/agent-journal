@@ -132,6 +132,8 @@ def _linkify_bare(m):
 def inline(text: str) -> str:
     text = html.escape(text)
     text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
+    # Markdown images: ![alt](url) -> <img src="url" alt="alt">
+    text = re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", r'<img src="\2" alt="\1">', text)
     text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', text)
     # auto-link bare URLs (skip those already inside an href= or as link text right after >)
     text = re.sub(r'(?<![">])(https?://[^\s<>"]+)', _linkify_bare, text)
