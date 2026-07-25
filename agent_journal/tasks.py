@@ -396,6 +396,15 @@ def main():
         + (f" agent_left={agent_left}" if agent_left else ""))
 
     for tp in ready:
+        # Belt-and-suspenders: agent tasks are filtered out above, but never
+        # move one to done/failed from this text-only runner.
+        try:
+            guard_task = json.loads(tp.read_text())
+            if guard_task.get("output_action") == AGENT_ACTION:
+                log(f"  SKIP agent task {tp.name} (should be handled by bridge)")
+                continue
+        except Exception:
+            pass
         ok = run_task(tp, now, args.dry_run)
         if args.dry_run:
             continue
