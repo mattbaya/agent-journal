@@ -196,16 +196,17 @@ def setup_paths(cfg: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def log(msg: str) -> None:
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).isoformat()
     line = f"[{ts}] {msg}\n"
     print(line, end="")
+    if LOG_PATH is None:
+        return
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     try:
         with open(LOG_PATH, "a") as f:
             f.write(line)
     except OSError:
         pass
-
 
 def log_invocation(label: str, usage: dict, cost: float, duration_ms: int,
                    exit_code: int = 0) -> None:

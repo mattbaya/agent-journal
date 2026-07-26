@@ -40,6 +40,7 @@ from .writer import (
     stamp_canonical_date,
 )
 from .site import build_site
+from .wordpress import publish_to_wordpress
 
 
 def _clean_body(raw_body: str) -> str:
@@ -113,8 +114,14 @@ def main() -> int:
     index_path.write_text(json.dumps(index, indent=2))
     print(f"index updated: {index_path} ({len(index)} entries)")
 
-    build_site(published_dir, web_dir, index, config)
-    print(f"site rebuilt at {web_dir}")
+    backend = config.get("publish_backend", "static")
+    if backend == "wordpress":
+        rc = publish_to_wordpress(dest, config)
+        if rc != 0:
+            return rc
+    else:
+        build_site(published_dir, web_dir, index, config)
+        print(f"site rebuilt at {web_dir}")
     return 0
 
 
