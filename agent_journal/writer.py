@@ -892,13 +892,25 @@ def safe_persist_tasks(tasks_list: list) -> list:
 # Site regen
 # ---------------------------------------------------------------------------
 
-def regenerate_site(index: list) -> None:
+def regenerate_site(index: list, entry_path: Path | None = None) -> None:
     if not SITE_DIR:
         return
     try:
-        from . import site as site_module
-        site_module.build_site(PUBLISHED_DIR, SITE_DIR, index, CONFIG)
-        log(f"site regenerated at {SITE_DIR}")
+        backend = CONFIG.get("publish_backend", "static")
+        if backend == "wordpress":
+            if entry_path:
+                from .wordpress import publish_to_wordpress
+                rc = publish_to_wordpress(entry_path, CONFIG)
+                if rc == 0:
+                    log(f"wordpress published: {entry_path.name}")
+                else:
+                    log(f"wordpress publish FAILED for {entry_path.name}")
+            else:
+                log("wordpress backend active; skipping static regen (no entry path)")
+        else:
+            from . import site as site_module
+            site_module.build_site(PUBLISHED_DIR, SITE_DIR, index, CONFIG)
+            log(f"site regenerated at {SITE_DIR}")
     except Exception as e:
         log(f"site regen FAILED: {e}")
 
@@ -1567,7 +1579,7 @@ def main() -> int:
     })
     save_index(past_entries)
     presentation_self_check()
-    regenerate_site(past_entries)
+    regenerate_site(past_entries, dest)
     _record_run(today)
     log(f"=== run done: published + self-reviewed after {rounds} rounds ===")
     return 0

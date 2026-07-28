@@ -43,6 +43,24 @@ from .site import build_site
 from .wordpress import publish_to_wordpress
 
 
+def publish_entry(entry_path: Path, config: dict, index: list | None = None) -> int:
+    """Publish or sync a single entry using the configured backend.
+
+    WordPress backend pushes the entry to the WordPress database. Static
+    backend rebuilds the whole static site (preserving the old behaviour).
+    Returns 0 on success, non-zero on failure.
+    """
+    backend = config.get("publish_backend", "static")
+    if backend == "wordpress":
+        return publish_to_wordpress(entry_path, config)
+
+    published_dir = Path(config["journal_dir"]).resolve() / "published"
+    web_dir = Path(config["web_dir"]).resolve()
+    build_site(published_dir, web_dir, index or [], config)
+    print(f"site rebuilt at {web_dir}")
+    return 0
+
+
 def _clean_body(raw_body: str) -> str:
     """Strip any stray RESEARCH/SIDECAR comment blocks and a dangling fence —
     same normalization the writer applies before publishing."""
@@ -114,15 +132,8 @@ def main() -> int:
     index_path.write_text(json.dumps(index, indent=2))
     print(f"index updated: {index_path} ({len(index)} entries)")
 
-    backend = config.get("publish_backend", "static")
-    if backend == "wordpress":
-        rc = publish_to_wordpress(dest, config)
-        if rc != 0:
-            return rc
-    else:
-        build_site(published_dir, web_dir, index, config)
-        print(f"site rebuilt at {web_dir}")
-    return 0
+    rc = publish_entry(dest, config, index)
+    return rc
 
 
 if __name__ == "__main__":

@@ -527,6 +527,9 @@ if __name__ == "__main__":
     ap.add_argument("--config", required=True)
     args = ap.parse_args()
     config = json.loads(Path(args.config).read_text())
+    if config.get("publish_backend") == "wordpress":
+        print("WordPress backend active; static site build disabled")
+        raise SystemExit(0)
     journal_dir = Path(config["journal_dir"]).resolve()
     site_dir = Path(config["web_dir"]).resolve()
     idx_path = journal_dir / "index.json"

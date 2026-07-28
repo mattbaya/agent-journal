@@ -228,8 +228,16 @@ def action_publish(task, output, now):
                    "tags": fm.get("tags") or [], "summary": fm.get("summary") or ""})
     INDEX_PATH.write_text(json.dumps(idx, indent=2))
     try:
-        from . import site as site_module
-        if SITE_DIR:
+        backend = CONFIG.get("publish_backend", "static")
+        if backend == "wordpress":
+            from .wordpress import publish_to_wordpress
+            rc = publish_to_wordpress(dest, CONFIG)
+            if rc != 0:
+                log(f"wordpress publish FAILED for {dest.name}")
+            else:
+                log(f"wordpress published: {dest.name}")
+        elif SITE_DIR:
+            from . import site as site_module
             site_module.build_site(PUBLISHED_DIR, SITE_DIR, idx, CONFIG)
     except Exception as e:
         log(f"site regen FAILED: {e}")
