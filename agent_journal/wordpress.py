@@ -4,6 +4,7 @@
 Pushes a finished markdown entry into a WordPress site using wp-cli.
 Idempotent: matches on slug and updates existing posts."""
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -25,6 +26,27 @@ def get_post_id(config: dict, slug: str):
     return int(ids[0]) if ids else None
 
 
+def get_post_id_by_date(config: dict, date: str):
+    """Return the newest published post whose post_date starts with `date`.
+
+    Vision-mode journals publish once per day. If a retry generates a different
+    slug, matching by date prevents duplicate posts.
+    """
+    res = wp_run(config, "post", "list", "--post_type=post", "--format=json",
+                 "--posts_per_page=100")
+    if res.returncode != 0:
+        return None
+    try:
+        posts = json.loads(res.stdout or "[]")
+    except json.JSONDecodeError:
+        return None
+    prefix = date + " "
+    for post in sorted(posts, key=lambda p: p.get("post_date", ""), reverse=True):
+        if (post.get("post_date") or "").startswith(prefix):
+            return int(post.get("ID"))
+    return None
+
+
 def publish_to_wordpress(entry_path: Path, config: dict) -> int:
     entry_path = Path(entry_path)
     text = entry_path.read_text(encoding="utf-8", errors="replace")
@@ -43,7 +65,11 @@ def publish_to_wordpress(entry_path: Path, config: dict) -> int:
     content_file = entry_path.parent / f".wp-sync-{slug}.html"
     content_file.write_text(body_html, encoding="utf-8")
 
+    # Prefer slug match (stable re-publishes), fall back to date match (retry
+    # with a different title should update, not duplicate).
     post_id = get_post_id(config, slug)
+    if not post_id and date:
+        post_id = get_post_id_by_date(config, date)
     tags_arg = ",".join(tags)
 
     common_args = [
@@ -58,6 +84,7 @@ def publish_to_wordpress(entry_path: Path, config: dict) -> int:
         res = wp_run(
             config,
             "post", "update", str(post_id), str(content_file),
+            f"--post_name={slug}",
             *common_args,
         )
         action = "updated"
